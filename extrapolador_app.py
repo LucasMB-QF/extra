@@ -613,8 +613,15 @@ if uploaded_file is not None:
                         df_orig = pd.DataFrame(st.session_state.datos_crudos[hoja_seleccionada])
                         
                         # Generar datos extrapolados con ediciones de sección
-                        df_ext = generar_datos_con_ediciones_seccion(
-                            st.session_state.datos_crudos[hoja_seleccionada], 
-                            st.session_state.config_hojas[hoja_seleccionada], 
-                            seed_value,
+# --- Generar Gráficos ---
+with st.spinner("Actualizando gráficos en tiempo real..."):
+    df_orig = pd.DataFrame(st.session_state.datos_crudos[hoja_seleccionada])
+    
+    # Generar datos extrapolados con ediciones de sección
+    df_ext = generar_datos_con_ediciones_seccion(
+        st.session_state.datos_crudos[hoja_seleccionada], 
+        st.session_state.config_hojas[hoja_seleccionada], 
+        seed_value,
+        st.session_state.ediciones_seccion.get(hoja_seleccionada, {})  # Añadir esta línea
+    )  # <-- CERRAR EL PARÉNTESIS AQUÍ
                            
