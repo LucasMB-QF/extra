@@ -411,7 +411,10 @@ else:
     st.session_state['chart_data_original'] = None
     st.session_state['chart_data_extrapolado'] = None
 
-if st.session_state['chart_data_original'] is not None and st.session_state['chart_data_extrapolado'] is not None:
+# --- V13.1 CORRECCIÓN: Asegurarse de que seed_value exista antes de mostrar los gráficos ---
+# Si 'seed_value' no está definido (porque no se ha cargado ningún archivo),
+# no intentes mostrar los gráficos.
+if st.session_state['chart_data_original'] is not None and st.session_state['chart_data_extrapolado'] is not None and 'seed_value' in locals():
     
     st.header(f"Visualización de Temperatura (Hoja: {st.session_state['sheet_temp']})")
     col1, col2 = st.columns(2)
