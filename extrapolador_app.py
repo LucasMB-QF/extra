@@ -124,22 +124,23 @@ def generar_curva_multiplicativa(longitud, variacion_percent, punto_pico_frac):
         return curva_multi
     except Exception: return np.ones(longitud)
 
-@st.cache_data(show_spinner=False)
-def aplicar_pipeline_a_columna(_datos_np, config_dl, seed):
+#@st.cache_data(show_spinner=False) # No podemos cachear esto, debe ser reactivo
+def aplicar_pipeline_a_columna(datos_np, config_dl, seed):
     """Aplica el pipeline de 4 pasos a una sola columna de datos."""
-    longitud_actual = len(_datos_np)
+    longitud_actual = len(datos_np)
     if longitud_actual < 20:
-        return _datos_np
+        return datos_np
 
+    # Sellar la aleatoriedad para esta columna específica
     col_seed = seed + hash(config_dl['dl_nombre']) % 1000
     random.seed(col_seed)
     np.random.seed(col_seed)
 
     # PASO 1: LIMPIEZA DE PICOS (Probabilística)
     if random.random() < config_dl["prob_limpieza_picos"]:
-        datos_base = medfilt(_datos_np, kernel_size=3)
+        datos_base = medfilt(datos_np, kernel_size=3)
     else:
-        datos_base = _datos_np
+        datos_base = datos_np
 
     # PASO 2: EXTRAPOLACIÓN (Variable por DL)
     curva_multi_dl = generar_curva_multiplicativa(longitud_actual, config_dl["variacion_percent"], config_dl["punto_pico_frac"])
@@ -209,14 +210,13 @@ def generar_configuracion_inicial(datos_crudos, config_base, seed_value):
             
     return config_hojas
 
-@st.cache_data(show_spinner=False)
-def generar_datos_extrapolados(_datos_crudos_hoja, _config_por_dl, seed_value):
+#@st.cache_data(show_spinner=False) # No se puede cachear si depende de los sliders
+def generar_datos_extrapolados_df(_datos_crudos_hoja, _config_por_dl, seed_value):
     """Genera un DataFrame extrapolado basado en la configuración de cada DL."""
     datos_extrapolados = {}
     for dl_nombre, datos_originales in _datos_crudos_hoja.items():
         if dl_nombre in _config_por_dl:
             config_dl = _config_por_dl[dl_nombre]
-            # Pasamos la semilla global para que el hash sea consistente
             datos_extrapolados[dl_nombre] = aplicar_pipeline_a_columna(datos_originales, config_dl, seed_value)
     
     return pd.DataFrame(dict([(k,pd.Series(v)) for k,v in datos_extrapolados.items()]))
@@ -267,7 +267,7 @@ def descargar_excel_modificado(wb_bytes, config_hojas, seed_value, file_name, pr
 
             for hoja_nombre in wb.sheetnames:
                 if hoja_nombre not in config_hojas:
-                    continue # Ignorar hojas que no tienen config (ej. de resumen)
+                    continue 
                     
                 config_a_usar = config_hojas[hoja_nombre]
                 ws = wb[hoja_nombre]
@@ -291,7 +291,6 @@ def descargar_excel_modificado(wb_bytes, config_hojas, seed_value, file_name, pr
                         
                         datos_finales = aplicar_pipeline_a_columna(datos_np, config_dl, seed_value)
                         
-                        # Aplicar Límite (solo si es T° y el preset lo requiere)
                         if aplicar_limite and ("%HR" not in hoja_nombre.upper() and "HUM" not in hoja_nombre.upper()):
                              np.clip(datos_finales, a_min=None, a_max=25.5, out=datos_finales)
 
@@ -315,8 +314,8 @@ def descargar_excel_modificado(wb_bytes, config_hojas, seed_value, file_name, pr
             return None
 
 # --- INTERFAZ DE STREAMLIT ---
-st.set_page_config(layout="wide", page_title="Extrapolador Maestro V17")
-st.title("Extrapolador Maestro V17 (Editor Híbrido) 🚀")
+st.set_page_config(layout="wide", page_title="Extrapolador Maestro V18")
+st.title("Extrapolador Maestro V18 (Editor Híbrido) 🚀")
 st.info("Genera una extrapolación base y luego ajusta cada curva individualmente en tiempo real.")
 
 # --- BARRA LATERAL (CONTROLES GLOBALES) ---
@@ -326,6 +325,7 @@ uploaded_file = st.sidebar.file_uploader("Cargar archivo .xlsm", type=["xlsm"])
 # --- LÓGICA PRINCIPAL ---
 if uploaded_file is not None:
     
+    # Cargar datos crudos solo si el archivo cambia
     if st.session_state.get('file_name') != uploaded_file.name:
         st.session_state.datos_crudos = leer_datos_crudos_excel(uploaded_file.getvalue())
         st.session_state.file_name = uploaded_file.name
@@ -343,59 +343,64 @@ if uploaded_file is not None:
             hoja_seleccionada = st.sidebar.selectbox(
                 "Seleccionar Hoja para Visualizar y Editar", 
                 available_sheets,
-                index=0
+                index=0,
+                key="hoja_seleccionada" # Clave para detectar cambios
             )
 
             st.sidebar.header("3. Generación Inicial")
-            seed_value = st.sidebar.number_input("Versión (Semilla Aleatoria)", value=1, min_value=1, step=1)
+            seed_value = st.sidebar.number_input("Versión (Semilla Aleatoria)", value=1, min_value=1, step=1, key="seed_value")
             preset_name = st.sidebar.selectbox("Seleccionar Preset de Prueba:", options=list(CONFIGURACION_BASE.keys()), key="preset_name")
             
-            if st.sidebar.button("Generar/Reiniciar Extrapolación Base", type="primary"):
-                config_base = CONFIGURACION_BASE[preset_name]
-                st.session_state.config_hojas = generar_configuracion_inicial(st.session_state.datos_crudos, config_base, seed_value)
-                st.success(f"Generada Versión {seed_value} con preset '{preset_name}'")
+            # Si la config no existe, o cambiamos la semilla/preset, generar la base
+            if 'config_hojas' not in st.session_state or st.session_state.get('last_seed') != seed_value or st.session_state.get('last_preset') != preset_name:
+                with st.spinner("Generando extrapolación base..."):
+                    config_base = CONFIGURACION_BASE[preset_name]
+                    st.session_state.config_hojas = generar_configuracion_inicial(st.session_state.datos_crudos, config_base, seed_value)
+                    st.session_state.last_seed = seed_value
+                    st.session_state.last_preset = preset_name
+                    st.toast(f"Generada Versión {seed_value} con preset '{preset_name}'")
 
-            # --- EDITOR Y GRÁFICOS (Solo si se ha generado) ---
-            if 'config_hojas' in st.session_state:
-                
-                # --- Editor Individual ---
-                st.sidebar.header("4. Editor Individual (Ajuste Fino)")
-                dl_names = list(st.session_state.datos_crudos[hoja_seleccionada].keys())
-                dl_names_con_opcion_global = ["Aplicar a TODAS"] + dl_names
-                dl_seleccionado = st.sidebar.selectbox("Curva a Editar:", dl_names_con_opcion_global)
 
-                # Cargar la config actual de la curva seleccionada (o la primera si es "TODAS")
-                dl_para_config = dl_names[0] if dl_seleccionado == "Aplicar a TODAS" else dl_seleccionado
+            # --- Editor Individual ---
+            st.sidebar.header("4. Editor Individual (Ajuste Fino)")
+            
+            # Usar los datos de la hoja seleccionada
+            dl_names = list(st.session_state.datos_crudos[hoja_seleccionada].keys())
+            dl_names_con_opcion_global = ["Aplicar a TODAS"] + dl_names
+            dl_seleccionado = st.sidebar.selectbox("Curva a Editar:", dl_names_con_opcion_global)
+
+            dl_para_config = dl_names[0] if dl_seleccionado == "Aplicar a TODAS" else dl_seleccionado
+            
+            # --- V18 FIX: Asegurarse de que el config exista antes de leerlo ---
+            if hoja_seleccionada not in st.session_state.config_hojas:
+                st.sidebar.warning("Haz clic en 'Generar Extrapolación Inicial' primero.")
+            else:
                 config_actual = st.session_state.config_hojas[hoja_seleccionada][dl_para_config]
 
                 # Sliders
                 prob_limpieza = st.sidebar.slider(
-                    "Limpieza de Picos (Probabilidad)", 0.0, 1.0, config_actual["prob_limpieza_picos"], 0.1, 
-                    help="1.0 = 100% limpio. 0.0 = 100% original (con picos).", key=f"clean_{dl_seleccionado}"
+                    "Limpieza de Picos", 0.0, 1.0, config_actual["prob_limpieza_picos"], 0.1, 
+                    help="1.0 = 100% limpio. 0.0 = 100% original (con picos).", key=f"clean_{dl_seleccionado}_{hoja_seleccionada}"
                 )
                 variacion_percent = st.sidebar.slider(
                     "Extrapolación (Pico %)", 0.0, 0.2, config_actual["variacion_percent"], 0.01, 
-                    help="Qué tanto 'sube' la curva en el pico.", key=f"var_{dl_seleccionado}"
+                    help="Qué tanto 'sube' la curva en el pico.", key=f"var_{dl_seleccionado}_{hoja_seleccionada}"
                 )
                 offset_base = st.sidebar.slider(
                     "Nivel Vertical (Offset)", -2.0, 1.0, config_actual["offset_base"], 0.1, 
-                    help="Sube o baja la curva completa.", key=f"offset_{dl_seleccionado}"
+                    help="Sube o baja la curva completa.", key=f"offset_{dl_seleccionado}_{hoja_seleccionada}"
                 )
                 amplitud = st.sidebar.slider(
                     "Nivel de 'Unicidad' (Deriva)", 0.0, 1.0, config_actual["amplitud"], 0.05, 
-                    help="Controla la 'personalidad' de la curva. 0 = plana.", key=f"amp_{dl_seleccionado}"
+                    help="Controla la 'personalidad' de la curva. 0 = plana.", key=f"amp_{dl_seleccionado}_{hoja_seleccionada}"
                 )
                 sigma = st.sidebar.slider(
                     "Suavidad de 'Unicidad' (Ondas)", 3, 25, config_actual["sigma"], 1, 
-                    help="Longitud de las 'ondas'. 3 = cortas. 20 = largas.", key=f"sigma_{dl_seleccionado}"
+                    help="Longitud de las 'ondas'. 3 = cortas. 20 = largas.", key=f"sigma_{dl_seleccionado}_{hoja_seleccionada}"
                 )
 
                 # --- Lógica de Actualización en Tiempo Real ---
-                dl_a_actualizar = []
-                if dl_seleccionado == "Aplicar a TODAS":
-                    dl_a_actualizar = dl_names
-                else:
-                    dl_a_actualizar = [dl_seleccionado]
+                dl_a_actualizar = dl_names if dl_seleccionado == "Aplicar a TODAS" else [dl_seleccionado]
                 
                 for dl in dl_a_actualizar:
                     st.session_state.config_hojas[hoja_seleccionada][dl]["prob_limpieza_picos"] = prob_limpieza
@@ -408,12 +413,11 @@ if uploaded_file is not None:
                 # --- Generar Gráficos ---
                 with st.spinner("Actualizando gráficos en tiempo real..."):
                     df_orig = pd.DataFrame(st.session_state.datos_crudos[hoja_seleccionada])
-                    df_ext = generar_datos_extrapolados(st.session_state.datos_crudos[hoja_seleccionada], st.session_state.config_hojas[hoja_seleccionada], seed_value)
+                    df_ext = generar_datos_extrapolados_df(st.session_state.datos_crudos[hoja_seleccionada], st.session_state.config_hojas[hoja_seleccionada], seed_value)
 
                 # --- Área Principal (Gráficos) ---
                 st.header(f"Visualización (Hoja: {hoja_seleccionada})")
                 
-                # Determinar si es T° o %HR para los límites
                 limite_min, limite_max = None, None
                 titulo_grafico = "Original"
                 titulo_graf_ext = f"Extrapolado (Versión {seed_value})"
@@ -440,12 +444,9 @@ if uploaded_file is not None:
                         st.session_state.config_hojas, 
                         seed_value,
                         uploaded_file.name,
-                        st.session_state.sheet_temp, # Pasa los nombres de hoja
-                        st.session_state.sheet_hr,
                         CONFIGURACION_BASE[preset_name]["archivo"]
                     )
                     if processed_bytes:
-                        # Crear el botón de descarga *después* de procesar
                         st.sidebar.download_button(
                             label="¡Descarga Lista! (Haz clic aquí)",
                             data=processed_bytes,
@@ -455,14 +456,15 @@ if uploaded_file is not None:
                         )
                         st.sidebar.success("¡Archivo listo para descargar!")
                         # Forzar un rerun para que el botón de descarga aparezca
-                        st.experimental_rerun()
+                        st.rerun()
 
         except Exception as e:
             st.error(f"Error Crítico: {e}")
             logger.error(f"Error en Streamlit: {e}", exc_info=True)
             st.session_state.clear()
 
-else:
-    # Pantalla inicial
+except Exception as e:
+    # --- Pantalla inicial si no hay archivo ---
     st.info("Cargue un archivo .xlsm para comenzar.")
+    logger.error(f"Error en el bloque principal: {e}", exc_info=True)
     st.session_state.clear()
