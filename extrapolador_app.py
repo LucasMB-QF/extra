@@ -17,71 +17,71 @@ logger = logging.getLogger(__name__)
 ARCHIVOS_CON_LIMITE = ["1. OQ_MAPEO.xlsm", "4. PQ_RUTA_20.xlsm", "5. PQ_RUTA_80.xlsm"]
 HOJAS_A_IGNORAR = ["CONSOLIDADO", "GRAFICOS", "RESUMEN", "TABLA", "RESULTADOS", "SUMMARY", "GRAFICO"] 
 
-# --- CONFIGURACIÓN BASE (Presets V20) ---
-# Se reemplaza 'prob_limpieza_picos' por 'suavizado_picos' (0.0 = original, 1.0 = plano)
+# --- CONFIGURACIÓN BASE (Presets V21) ---
+# Se re-introduce 'escala_picos' (0.0 = plano, 1.0 = original)
 CONFIGURACION_BASE = {
     "OQ Mapeo": {
         "archivo": "1. OQ MAPEO 72 INV.xlsm",        
         "variacion_min": 0.01, "variacion_max": 0.02,
         "amplitud": 0.30, "sigma": 12, "punto_pico": 0.5,
         "offset_min": -0.5, "offset_max": 0.0,
-        "suavizado_picos": 0.9 # 0.0 = original, 1.0 = plano
+        "escala_picos": 0.8 # 80% altura de pico
     },
     "OQ Apertura": {
         "archivo": "2. OQ APERTURA 72 INV.xlsm",     
         "variacion_min": 0.03, "variacion_max": 0.05,
         "amplitud": 0.40, "sigma": 8, "punto_pico": 0.6,
         "offset_min": -1.0, "offset_max": -0.2,
-        "suavizado_picos": 0.5
+        "escala_picos": 0.7 # 70% altura de pico
     },
     "OQ Apagado": {
         "archivo": "3. OQ APAGADO 72 INV.xlsm",      
         "variacion_min": 0.01, "variacion_max": 0.02,
         "amplitud": 0.50, "sigma": 20, "punto_pico": 0.4,
         "offset_min": -1.2, "offset_max": -0.3,
-        "suavizado_picos": 0.9
+        "escala_picos": 0.9 # 90% altura de pico
     },
     "PQ Ruta 20%": {
         "archivo": "4. PQ RUTA 20 72 INV.xlsm",      
         "variacion_min": 0.02, "variacion_max": 0.04,
         "amplitud": 0.35, "sigma": 12, "punto_pico": 0.5,
         "offset_min": -0.9, "offset_max": -0.2,
-        "suavizado_picos": 0.7
+        "escala_picos": 0.8
     },
     "PQ Ruta 80%": {
         "archivo": "5. PQ RUTA 80 72 INV.xlsm",      
         "variacion_min": 0.02, "variacion_max": 0.04,
         "amplitud": 0.35, "sigma": 12, "punto_pico": 0.5,
         "offset_min": -0.9, "offset_max": -0.2,
-        "suavizado_picos": 0.7
+        "escala_picos": 0.8
     },
     "PQ Apertura 20%": {
         "archivo": "6. PQ APERTURA 20 72 INV.xlsm",  
         "variacion_min": 0.03, "variacion_max": 0.05,
         "amplitud": 0.40, "sigma": 8, "punto_pico": 0.6,
         "offset_min": -1.0, "offset_max": -0.2,
-        "suavizado_picos": 0.5
+        "escala_picos": 0.7
     },
     "PQ Apertura 80%": {
         "archivo": "7. PQ APERTURA 80 72 INV.xlsm",  
         "variacion_min": 0.03, "variacion_max": 0.05,
         "amplitud": 0.40, "sigma": 8, "punto_pico": 0.6,
         "offset_min": -1.0, "offset_max": -0.2,
-        "suavizado_picos": 0.5
+        "escala_picos": 0.7
     },
     "PQ Apagado 20%": {
         "archivo": "8. PQ APAGADO 20 72 INV.xlsm",   
         "variacion_min": 0.01, "variacion_max": 0.02,
         "amplitud": 0.50, "sigma": 20, "punto_pico": 0.4,
         "offset_min": -1.2, "offset_max": -0.3,
-        "suavizado_picos": 0.9
+        "escala_picos": 0.9
     },
     "PQ Apagado 80%": {
         "archivo": "9. PQ APAGADO 80 72 INV.xlsm",   
         "variacion_min": 0.01, "variacion_max": 0.02,
         "amplitud": 0.50, "sigma": 20, "punto_pico": 0.4,
         "offset_min": -1.2, "offset_max": -0.3,
-        "suavizado_picos": 0.9
+        "escala_picos": 0.9
     },
 }
 
@@ -137,15 +137,22 @@ def aplicar_pipeline_a_columna(datos_np, config_dl, seed):
     random.seed(col_seed)
     np.random.seed(col_seed)
 
-    # --- V20 MEJORA: Lógica de Suavizado (Blend) ---
-    # PASO 1: SUAVIZADO DE PICOS (Blend en lugar de Probabilístico)
+    # --- V21 MEJORA: Lógica de Escala de Picos ---
+    # PASO 1: ESCALA DE PICOS (Amplitud en eje Y)
+    # 1. Encontrar la base (suelo)
     datos_base_limpios = medfilt(datos_np, kernel_size=3)
     
-    # factor_suavizado = 0.0 -> 100% original (datos_np)
-    # factor_suavizado = 1.0 -> 100% limpio (datos_base_limpios)
-    factor_suavizado = config_dl["suavizado_picos"]
-    datos_base = (datos_np * (1.0 - factor_suavizado)) + (datos_base_limpios * factor_suavizado)
-    # --- Fin V20 MEJORA ---
+    # 2. Encontrar los picos (diferencia entre original y suelo)
+    picos_originales = datos_np - datos_base_limpios
+    
+    # 3. Escalar esos picos
+    #    escala = 1.0 -> 100% original
+    #    escala = 0.0 -> 0% picos (plano)
+    picos_escalados = picos_originales * config_dl["escala_picos"]
+    
+    # 4. Re-añadir picos escalados a la base
+    datos_base = datos_base_limpios + picos_escalados
+    # --- Fin V21 MEJORA ---
 
     # PASO 2: EXTRAPOLACIÓN (Variable por DL)
     curva_multi_dl = generar_curva_multiplicativa(longitud_actual, config_dl["variacion_percent"], config_dl["punto_pico_frac"])
@@ -165,36 +172,17 @@ def aplicar_pipeline_a_columna(datos_np, config_dl, seed):
 def aplicar_edicion_seccion(datos_originales, inicio_idx, fin_idx, ajuste_offset, ajuste_factor):
     """
     Aplica edición a una sección específica de los datos.
-    
-    Args:
-        datos_originales: Array numpy con los datos originales
-        inicio_idx: Índice de inicio de la sección a editar
-        fin_idx: Índice de fin de la sección a editar
-        ajuste_offset: Valor a sumar/restar a la sección
-        ajuste_factor: Factor por el que multiplicar la sección
-    
-    Returns:
-        Array numpy con la sección editada
     """
     datos_editados = datos_originales.copy()
     
-    # Asegurarse de que los índices estén dentro de los límites
     inicio_idx = max(0, min(inicio_idx, len(datos_originales)-1))
     fin_idx = max(0, min(fin_idx, len(datos_originales)-1))
     
     if inicio_idx >= fin_idx:
         return datos_originales
     
-    # Aplicar transformaciones a la sección seleccionada
     seccion = datos_originales[inicio_idx:fin_idx+1]
-    
-    # Aplicar multiplicación primero
-    seccion_ajustada = seccion * ajuste_factor
-    
-    # Luego aplicar offset
-    seccion_ajustada = seccion_ajustada + ajuste_offset
-    
-    # Reemplazar la sección en los datos editados
+    seccion_ajustada = (seccion * ajuste_factor) + ajuste_offset
     datos_editados[inicio_idx:fin_idx+1] = seccion_ajustada
     
     return datos_editados
@@ -202,15 +190,6 @@ def aplicar_edicion_seccion(datos_originales, inicio_idx, fin_idx, ajuste_offset
 def generar_datos_con_ediciones_seccion(_datos_crudos_hoja, _config_por_dl, seed_value, ediciones_seccion):
     """
     Genera datos extrapolados aplicando también ediciones de sección.
-    
-    Args:
-        _datos_crudos_hoja: Datos originales de la hoja
-        _config_por_dl: Configuración por DL
-        seed_value: Semilla para reproducibilidad
-        ediciones_seccion: Dict con ediciones de sección por DL
-    
-    Returns:
-        DataFrame con datos extrapolados y ediciones aplicadas
     """
     datos_extrapolados = {}
     
@@ -282,7 +261,7 @@ def generar_configuracion_inicial(datos_crudos, config_base, seed_value):
                 "sigma": config_base["sigma"],
                 "punto_pico_frac": config_base["punto_pico"],
                 "offset_base": random.uniform(config_base["offset_min"], config_base["offset_max"]),
-                "suavizado_picos": config_base["suavizado_picos"] # --- V20 MEJORA: Clave actualizada
+                "escala_picos": config_base["escala_picos"] # --- V21 MEJORA: Clave actualizada
             }
         config_hojas[hoja_nombre] = config_hoja_actual
             
@@ -319,7 +298,6 @@ def dibujar_grafico_con_limites(df, titulo, limite_max=None, limite_min=None, se
     lineas = base.mark_line(point=False).interactive()
     grafico_final = lineas
     
-    # Añadir área de sección seleccionada si existe
     if seccion_seleccionada and 'inicio' in seccion_seleccionada and 'fin' in seccion_seleccionada:
         area_seleccionada = alt.Chart(pd.DataFrame({
             'x1': [seccion_seleccionada['inicio']],
@@ -331,7 +309,7 @@ def dibujar_grafico_con_limites(df, titulo, limite_max=None, limite_min=None, se
             x='x1',
             x2='x2',
             y=alt.value(0),
-            y2=alt.value(400)  # Ajustar según el rango de datos
+            y2=alt.value(400)
         )
         grafico_final = grafico_final + area_seleccionada
     
@@ -386,7 +364,6 @@ def descargar_excel_modificado(wb_bytes, config_hojas, seed_value, file_name, pr
                         
                         datos_finales = aplicar_pipeline_a_columna(datos_np, config_dl, seed_value)
                         
-                        # Aplicar ediciones de sección si existen
                         if ediciones_seccion and hoja_nombre in ediciones_seccion and header_value in ediciones_seccion[hoja_nombre]:
                             for edicion in ediciones_seccion[hoja_nombre][header_value]:
                                 datos_finales = aplicar_edicion_seccion(
@@ -397,7 +374,6 @@ def descargar_excel_modificado(wb_bytes, config_hojas, seed_value, file_name, pr
                                     edicion['ajuste_factor']
                                 )
 
-                        # Aplicar Límite (solo si es T° y el preset lo requiere)
                         if aplicar_limite and ("%HR" not in hoja_nombre.upper() and "HUM" not in hoja_nombre.upper()):
                              np.clip(datos_finales, a_min=None, a_max=25.5, out=datos_finales)
 
@@ -421,9 +397,9 @@ def descargar_excel_modificado(wb_bytes, config_hojas, seed_value, file_name, pr
             return None
 
 # --- INTERFAZ DE STREAMLIT ---
-st.set_page_config(layout="wide", page_title="Extrapolador Maestro V20")
-st.title("Extrapolador Maestro V20 (Suavizado + Secciones) 🚀") # Título V20
-st.info("Genera una extrapolación base, ajusta el suavizado de picos, y edita secciones específicas en tiempo real.")
+st.set_page_config(layout="wide", page_title="Extrapolador Maestro V21")
+st.title("Extrapolador Maestro V21 (Escala de Picos + Secciones) 🚀") # Título V21
+st.info("Genera una extrapolación base, ajusta la altura de los picos, y edita secciones específicas en tiempo real.")
 
 # --- BARRA LATERAL (CONTROLES GLOBALES) ---
 st.sidebar.header("1. Carga de Archivo")
@@ -431,19 +407,18 @@ uploaded_file = st.sidebar.file_uploader("Cargar archivo .xlsm", type=["xlsm"])
 
 # --- Inicializar estado de sesión para ediciones de sección ---
 if 'ediciones_seccion' not in st.session_state:
-    st.session_state.ediciones_seccion = {}  # Estructura: {hoja: {dl: [ediciones]}}
+    st.session_state.ediciones_seccion = {}
 
-# --- LÓGICA PRINCIPAL (V20 - Con edición de secciones) ---
+# --- LÓGICA PRINCIPAL (V21 - Con edición de secciones) ---
 if uploaded_file is not None:
     
-    # Cargar datos crudos solo si el archivo cambia
     if st.session_state.get('file_name') != uploaded_file.name:
         st.session_state.datos_crudos = leer_datos_crudos_excel(uploaded_file.getvalue())
         st.session_state.file_name = uploaded_file.name
         st.session_state.original_file_bytes = uploaded_file.getvalue()
         if 'config_hojas' in st.session_state: del st.session_state.config_hojas
-        st.session_state.ediciones_seccion = {}  # Limpiar ediciones al cambiar archivo
-        st.cache_data.clear() # Limpiar caché al subir nuevo archivo
+        st.session_state.ediciones_seccion = {}
+        st.cache_data.clear()
 
     if not st.session_state.datos_crudos:
         st.error("No se pudieron leer datos 'DL' válidos de este archivo. Revise el formato.")
@@ -452,7 +427,6 @@ if uploaded_file is not None:
             available_sheets = list(st.session_state.datos_crudos.keys())
             st.sidebar.header("2. Hoja de Trabajo")
             
-            # Selector de Hoja de Trabajo
             hoja_seleccionada = st.sidebar.selectbox(
                 "Seleccionar Hoja para Visualizar y Editar", 
                 available_sheets,
@@ -464,27 +438,23 @@ if uploaded_file is not None:
             seed_value = st.sidebar.number_input("Versión (Semilla Aleatoria)", value=1, min_value=1, step=1, key="seed_value")
             preset_name = st.sidebar.selectbox("Seleccionar Preset de Prueba:", options=list(CONFIGURACION_BASE.keys()), key="preset_name")
             
-            # Botón para generar la configuración base
             if st.sidebar.button("Generar/Reiniciar Extrapolación Base", type="primary"):
                 with st.spinner("Generando extrapolación base..."):
                     config_base = CONFIGURACION_BASE[preset_name]
                     st.session_state.config_hojas = generar_configuracion_inicial(st.session_state.datos_crudos, config_base, seed_value)
                     st.session_state.last_seed = seed_value
                     st.session_state.last_preset = preset_name
-                    st.session_state.ediciones_seccion = {}  # Limpiar ediciones al regenerar
+                    st.session_state.ediciones_seccion = {}
                     st.toast(f"Generada Versión {seed_value} con preset '{preset_name}'")
-                    st.rerun() # Forzar rerun para mostrar los sliders
+                    st.rerun()
             
-            # --- V20 CORRECCIÓN: Lógica para manejar cambios de semilla/preset sin botón ---
             if 'config_hojas' not in st.session_state or \
                st.session_state.get('last_seed') != seed_value or \
                st.session_state.get('last_preset') != preset_name:
                 st.sidebar.warning("Haz clic en 'Generar/Reiniciar Base' para aplicar la nueva Versión o Preset.")
 
-            # --- EDITOR Y GRÁFICOS (Solo si se ha generado la base) ---
             if 'config_hojas' in st.session_state:
                 
-                # --- Editor Individual ---
                 st.sidebar.header("4. Editor Individual (Ajuste Fino)")
                 
                 dl_names = list(st.session_state.datos_crudos[hoja_seleccionada].keys())
@@ -498,10 +468,11 @@ if uploaded_file is not None:
                 else:
                     config_actual = st.session_state.config_hojas[hoja_seleccionada][dl_para_config]
 
-                    # --- V20 MEJORA: Slider de Suavizado ---
-                    suavizado_picos = st.sidebar.slider(
-                        "Suavizado de Picos", 0.0, 1.0, config_actual["suavizado_picos"], 0.1, 
-                        help="1.0 = 100% plano (picos eliminados). 0.0 = 100% original.", key=f"clean_{dl_seleccionado}_{hoja_seleccionada}"
+                    # --- V21 MEJORA: Slider de Escala de Picos ---
+                    escala_picos = st.sidebar.slider(
+                        "Escala de Picos", 0.0, 1.0, config_actual["escala_picos"], 0.1, 
+                        help="Controla la altura de los picos. 1.0 = 100% original. 0.0 = 100% plano (picos eliminados).", 
+                        key=f"escala_{dl_seleccionado}_{hoja_seleccionada}"
                     )
                     
                     # Sliders para edición completa (se mantienen)
@@ -526,7 +497,7 @@ if uploaded_file is not None:
                     dl_a_actualizar = dl_names if dl_seleccionado == "Aplicar a TODAS" else [dl_seleccionado]
                     
                     for dl in dl_a_actualizar:
-                        st.session_state.config_hojas[hoja_seleccionada][dl]["suavizado_picos"] = suavizado_picos # --- V20 MEJORA
+                        st.session_state.config_hojas[hoja_seleccionada][dl]["escala_picos"] = escala_picos # --- V21 MEJORA
                         st.session_state.config_hojas[hoja_seleccionada][dl]["variacion_percent"] = variacion_percent
                         st.session_state.config_hojas[hoja_seleccionada][dl]["offset_base"] = offset_base
                         st.session_state.config_hojas[hoja_seleccionada][dl]["amplitud"] = amplitud
