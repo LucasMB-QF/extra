@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 ARCHIVOS_CON_LIMITE = ["1. OQ_MAPEO.xlsm", "4. PQ_RUTA_20.xlsm", "5. PQ_RUTA_80.xlsm"]
 HOJAS_A_IGNORAR = ["CONSOLIDADO", "GRAFICOS", "RESUMEN", "TABLA", "RESULTADOS", "SUMMARY", "GRAFICO"] 
 
-# --- CONFIGURACIÓN BASE (Presets V23) ---
+# --- CONFIGURACIÓN BASE (Presets V23/V24) ---
 CONFIGURACION_BASE = {
     "OQ Mapeo": {
         "archivo": "1. OQ MAPEO 72 INV.xlsm",        
@@ -27,7 +27,7 @@ CONFIGURACION_BASE = {
         "escala_picos": 0.8,
         "aplanado_global": 0.0
     },
-    # ... (demás presets se mantienen igual) ...
+    # ... (demás presets) ...
     "PQ Apagado 80%": {
         "archivo": "9. PQ APAGADO 80 72 INV.xlsm",   
         "variacion_min": 0.01, "variacion_max": 0.02,
@@ -139,7 +139,6 @@ def aplicar_edicion_seccion(datos_originales, inicio_idx, fin_idx,
 
     # 3. Extrapolación (Sección)
     if variacion_sec > 0.0: # 0.0 es el default (sin efecto)
-        # Usamos 0.5 como punto pico default (centro de la sección)
         curva_multi_sec = generar_curva_multiplicativa(len(seccion), variacion_sec, 0.5)
         seccion = seccion * curva_multi_sec
 
@@ -197,13 +196,13 @@ def generar_datos_con_ediciones_seccion(_datos_crudos_hoja, _config_por_dl, seed
                         datos_procesados,
                         edicion['inicio_idx'],
                         edicion['fin_idx'],
-                        edicion['offset_sec'],
-                        edicion['aplanado_sec'],
-                        edicion['escala_picos_sec'],
-                        edicion['variacion_sec'],
-                        edicion['amplitud_sec'],
-                        edicion['sigma_sec'],
-                        edicion['seed_sec']
+                        edicion.get('offset_sec', 0.0), # V24.1 - Usar .get() para seguridad
+                        edicion.get('aplanado_sec', 0.0),
+                        edicion.get('escala_picos_sec', 1.0),
+                        edicion.get('variacion_sec', 0.0),
+                        edicion.get('amplitud_sec', 0.0),
+                        edicion.get('sigma_sec', 12),
+                        edicion.get('seed_sec', 1)
                     )
             
             datos_extrapolados[dl_nombre] = datos_procesados
@@ -348,7 +347,7 @@ def descargar_excel_modificado(wb_bytes, config_hojas, seed_value, file_name, pr
                         datos_np = np.array(valores_originales)
                         config_dl = config_a_usar[header_value]
                         
-                        # --- V24 MEJORA: Lógica de generación replicada ---
+                        # --- V24.1 MEJORA: Lógica de generación replicada ---
                         datos_finales = aplicar_pipeline_a_columna(datos_np, config_dl, seed_value)
                         
                         ajuste_aplanado_global = config_dl.get("aplanado_global", 0.0)
@@ -364,13 +363,13 @@ def descargar_excel_modificado(wb_bytes, config_hojas, seed_value, file_name, pr
                                     datos_finales,
                                     edicion['inicio_idx'],
                                     edicion['fin_idx'],
-                                    edicion['offset_sec'],
-                                    edicion['aplanado_sec'],
-                                    edicion['escala_picos_sec'],
-                                    edicion['variacion_sec'],
-                                    edicion['amplitud_sec'],
-                                    edicion['sigma_sec'],
-                                    edicion['seed_sec']
+                                    edicion.get('offset_sec', 0.0), # V24.1 - Usar .get()
+                                    edicion.get('aplanado_sec', 0.0),
+                                    edicion.get('escala_picos_sec', 1.0),
+                                    edicion.get('variacion_sec', 0.0),
+                                    edicion.get('amplitud_sec', 0.0),
+                                    edicion.get('sigma_sec', 12),
+                                    edicion.get('seed_sec', 1)
                                 )
                         # --- Fin de la lógica ---
 
@@ -397,8 +396,8 @@ def descargar_excel_modificado(wb_bytes, config_hojas, seed_value, file_name, pr
             return None
 
 # --- INTERFAZ DE STREAMLIT ---
-st.set_page_config(layout="wide", page_title="Extrapolador Maestro V24")
-st.title("Extrapolador Maestro V24 (Control Total por Sección) 🚀") # Título V24
+st.set_page_config(layout="wide", page_title="Extrapolador Maestro V24.1")
+st.title("Extrapolador Maestro V24.1 (Control Total por Sección) 🚀") # Título V24.1
 st.info("Genera una extrapolación base, y luego aplica un pipeline de edición completo por sección.")
 
 # --- BARRA LATERAL (CONTROLES GLOBALES) ---
@@ -409,7 +408,7 @@ uploaded_file = st.sidebar.file_uploader("Cargar archivo .xlsm", type=["xlsm"])
 if 'ediciones_seccion' not in st.session_state:
     st.session_state.ediciones_seccion = {}
 
-# --- LÓGICA PRINCIPAL (V24) ---
+# --- LÓGICA PRINCIPAL (V24.1) ---
 if uploaded_file is not None:
     
     if st.session_state.get('file_name') != uploaded_file.name:
@@ -420,6 +419,7 @@ if uploaded_file is not None:
         st.session_state.ediciones_seccion = {}
         st.cache_data.clear()
 
+    # --- FIX 1 (V24.1): Usar .get() para evitar el AttributeError ---
     if not st.session_state.get("datos_crudos"):
         st.error("No se pudieron leer datos 'DL' válidos de este archivo. Revise el formato.")
     else:
@@ -539,7 +539,6 @@ if uploaded_file is not None:
                     
                     st.sidebar.markdown("##### 5b. Aplicar Transformaciones (Sección)")
                     
-                    # Controles de V22
                     ajuste_offset_seccion = st.sidebar.slider(
                         "Offset (Sección)", -2.0, 2.0, 0.0, 0.1,
                         help="Sube o baja solo la sección seleccionada",
@@ -552,7 +551,6 @@ if uploaded_file is not None:
                         key="ajuste_aplanado_seccion"
                     )
                     
-                    # --- Nuevos controles (V24) ---
                     escala_picos_seccion = st.sidebar.slider(
                         "Escala Picos (Sección)", 0.0, 1.0, 1.0, 0.1, 
                         help="Achata picos solo en esta sección. 1.0 = sin efecto.", 
@@ -586,7 +584,6 @@ if uploaded_file is not None:
                             if dl_para_edicion_seccion not in st.session_state.ediciones_seccion[hoja_seleccionada]:
                                 st.session_state.ediciones_seccion[hoja_seleccionada][dl_para_edicion_seccion] = []
                             
-                            # --- V24 MEJORA: Guardar todos los parámetros ---
                             nueva_edicion = {
                                 'inicio_idx': inicio_seccion,
                                 'fin_idx': fin_seccion,
@@ -596,7 +593,7 @@ if uploaded_file is not None:
                                 'variacion_sec': variacion_seccion,
                                 'amplitud_sec': amplitud_seccion,
                                 'sigma_sec': sigma_seccion,
-                                'seed_sec': random.randint(1, 100000) # Seed para la deriva de sección
+                                'seed_sec': random.randint(1, 100000) 
                             }
                             st.session_state.ediciones_seccion[hoja_seleccionada][dl_para_edicion_seccion].append(nueva_edicion)
                             st.toast(f"Edición aplicada a {dl_para_edicion_seccion} en índices {inicio_seccion}-{fin_seccion}")
@@ -616,14 +613,15 @@ if uploaded_file is not None:
                         
                         st.sidebar.info("Ediciones activas:")
                         for i, edicion in enumerate(st.session_state.ediciones_seccion[hoja_seleccionada][dl_para_edicion_seccion]):
-                            # --- V24 MEJORA: Mostrar más info (simplificada) ---
+                            
+                            # --- FIX 2 (V24.1): Usar .get() para mostrar ---
                             st.sidebar.write(
                                 f"{i+1}. Índices {edicion['inicio_idx']}-{edicion['fin_idx']}: "
-                                f"Offset={edicion['offset_sec']:.1f}, "
-                                f"Aplanado={edicion['aplanado_sec']:.1f}, "
-                                f"Picos={edicion['escala_picos_sec']:.1f}, "
-                                f"Extrap={edicion['variacion_sec']:.2f}, "
-                                f"Deriva={edicion['amplitud_sec']:.1f}"
+                                f"Offset={edicion.get('offset_sec', 0.0):.1f}, "
+                                f"Aplanado={edicion.get('aplanado_sec', 0.0):.1f}, "
+                                f"Picos={edicion.get('escala_picos_sec', 1.0):.1f}, "
+                                f"Extrap={edicion.get('variacion_sec', 0.0):.2f}, "
+                                f"Deriva={edicion.get('amplitud_sec', 0.0):.1f}"
                             )
 
                     # --- Generar Gráficos ---
@@ -690,7 +688,8 @@ if uploaded_file is not None:
         except Exception as e:
             st.error(f"Error Crítico: {e}")
             logger.error(f"Error en Streamlit: {e}", exc_info=True)
-            st.session_state.clear()
+            # --- FIX 3 (V24.1): NO borrar el estado para poder debuggear ---
+            # st.session_state.clear() 
 
 else:
     st.info("Cargue un archivo .xlsm para comenzar.")
