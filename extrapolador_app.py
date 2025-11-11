@@ -110,7 +110,7 @@ def aplicar_pipeline_a_columna(datos_np, config_dl, seed):
     
     return datos_finales
 
-# --- V24 MEJORA: Pipeline de Edición de Sección ---
+# --- V24 Pipeline de Edición de Sección ---
 def aplicar_edicion_seccion(datos_originales, inicio_idx, fin_idx, 
                             offset_sec, aplanado_sec, 
                             escala_picos_sec, variacion_sec, 
@@ -347,7 +347,7 @@ def descargar_excel_modificado(wb_bytes, config_hojas, seed_value, file_name, pr
                         datos_np = np.array(valores_originales)
                         config_dl = config_a_usar[header_value]
                         
-                        # --- V24.1 MEJORA: Lógica de generación replicada ---
+                        # --- Lógica de generación replicada (V24.1) ---
                         datos_finales = aplicar_pipeline_a_columna(datos_np, config_dl, seed_value)
                         
                         ajuste_aplanado_global = config_dl.get("aplanado_global", 0.0)
@@ -363,7 +363,7 @@ def descargar_excel_modificado(wb_bytes, config_hojas, seed_value, file_name, pr
                                     datos_finales,
                                     edicion['inicio_idx'],
                                     edicion['fin_idx'],
-                                    edicion.get('offset_sec', 0.0), # V24.1 - Usar .get()
+                                    edicion.get('offset_sec', 0.0), 
                                     edicion.get('aplanado_sec', 0.0),
                                     edicion.get('escala_picos_sec', 1.0),
                                     edicion.get('variacion_sec', 0.0),
@@ -396,9 +396,9 @@ def descargar_excel_modificado(wb_bytes, config_hojas, seed_value, file_name, pr
             return None
 
 # --- INTERFAZ DE STREAMLIT ---
-st.set_page_config(layout="wide", page_title="Extrapolador Maestro V24.1")
-st.title("Extrapolador Maestro V24.1 (Control Total por Sección) 🚀") # Título V24.1
-st.info("Genera una extrapolación base, y luego aplica un pipeline de edición completo por sección.")
+st.set_page_config(layout="wide", page_title="Extrapolador Maestro V25")
+st.title("Extrapolador Maestro V25 (Edición Persistente) 🚀") # Título V25
+st.info("Genera una extrapolación base, edita curvas individuales (los cambios se guardan) y aplica configs a todas.")
 
 # --- BARRA LATERAL (CONTROLES GLOBALES) ---
 st.sidebar.header("1. Carga de Archivo")
@@ -408,7 +408,7 @@ uploaded_file = st.sidebar.file_uploader("Cargar archivo .xlsm", type=["xlsm"])
 if 'ediciones_seccion' not in st.session_state:
     st.session_state.ediciones_seccion = {}
 
-# --- LÓGICA PRINCIPAL (V24.1) ---
+# --- LÓGICA PRINCIPAL (V25) ---
 if uploaded_file is not None:
     
     if st.session_state.get('file_name') != uploaded_file.name:
@@ -419,7 +419,6 @@ if uploaded_file is not None:
         st.session_state.ediciones_seccion = {}
         st.cache_data.clear()
 
-    # --- FIX 1 (V24.1): Usar .get() para evitar el AttributeError ---
     if not st.session_state.get("datos_crudos"):
         st.error("No se pudieron leer datos 'DL' válidos de este archivo. Revise el formato.")
     else:
@@ -458,12 +457,18 @@ if uploaded_file is not None:
                 st.sidebar.header("4. Editor Individual (Ajuste Global)")
                 
                 dl_names = list(st.session_state.datos_crudos[hoja_seleccionada].keys())
-                dl_names_con_opcion_global = ["Aplicar a TODAS"] + dl_names
-                dl_seleccionado = st.sidebar.selectbox("Curva a Editar:", dl_names_con_opcion_global)
-
-                dl_para_config = dl_names[0] if dl_seleccionado == "Aplicar a TODAS" else dl_seleccionado
                 
-                if hoja_seleccionada not in st.session_state.config_hojas or dl_para_config not in st.session_state.config_hojas[hoja_seleccionada]:
+                # --- V25 MEJORA: Dropdown solo con DLs ---
+                dl_seleccionado = st.sidebar.selectbox(
+                    "Curva a Editar:", 
+                    dl_names,
+                    key="dl_seleccionado_individual"
+                )
+
+                # --- V25 MEJORA: Config siempre es el DL seleccionado ---
+                dl_para_config = dl_seleccionado
+                
+                if not dl_para_config or hoja_seleccionada not in st.session_state.config_hojas or dl_para_config not in st.session_state.config_hojas[hoja_seleccionada]:
                     st.sidebar.error(f"Error: No se encontró config para {hoja_seleccionada}. Intenta 'Generar Base' de nuevo.")
                 else:
                     config_actual = st.session_state.config_hojas[hoja_seleccionada][dl_para_config]
@@ -498,8 +503,8 @@ if uploaded_file is not None:
                         help="Longitud de las 'ondas'. 3 = cortas. 20 = largas.", key=f"sigma_{dl_seleccionado}_{hoja_seleccionada}"
                     )
 
-                    # --- Lógica de Actualización en Tiempo Real ---
-                    dl_a_actualizar = dl_names if dl_seleccionado == "Aplicar a TODAS" else [dl_seleccionado]
+                    # --- V25 MEJORA: Lógica de Actualización (solo actualiza 1 DL) ---
+                    dl_a_actualizar = [dl_seleccionado]
                     
                     for dl in dl_a_actualizar:
                         st.session_state.config_hojas[hoja_seleccionada][dl]["escala_picos"] = escala_picos
@@ -509,7 +514,18 @@ if uploaded_file is not None:
                         st.session_state.config_hojas[hoja_seleccionada][dl]["amplitud"] = amplitud
                         st.session_state.config_hojas[hoja_seleccionada][dl]["sigma"] = sigma
 
-                    # --- V24 MEJORA: Editor de Sección Completo ---
+                    # --- V25 MEJORA: Botón para "Aplicar a Todas" ---
+                    st.sidebar.markdown("---")
+                    if st.sidebar.button(f"Aplicar ajustes de {dl_seleccionado} a TODAS", type="primary"):
+                        config_a_copiar = st.session_state.config_hojas[hoja_seleccionada][dl_seleccionado]
+                        for dl_name in dl_names:
+                            # Copiamos la config actual a todas las demás
+                            st.session_state.config_hojas[hoja_seleccionada][dl_name] = config_a_copiar.copy()
+                        st.toast(f"¡Ajustes de {dl_seleccionado} aplicados a TODAS las curvas de {hoja_seleccionada}!")
+                        st.rerun() # Forzamos rerun para que los gráficos se actualicen
+
+
+                    # --- Editor de Sección Específica (V24) ---
                     st.sidebar.header("5. Editor de Sección Específica")
                     
                     dl_para_edicion_seccion = st.sidebar.selectbox(
@@ -614,7 +630,6 @@ if uploaded_file is not None:
                         st.sidebar.info("Ediciones activas:")
                         for i, edicion in enumerate(st.session_state.ediciones_seccion[hoja_seleccionada][dl_para_edicion_seccion]):
                             
-                            # --- FIX 2 (V24.1): Usar .get() para mostrar ---
                             st.sidebar.write(
                                 f"{i+1}. Índices {edicion['inicio_idx']}-{edicion['fin_idx']}: "
                                 f"Offset={edicion.get('offset_sec', 0.0):.1f}, "
@@ -688,8 +703,7 @@ if uploaded_file is not None:
         except Exception as e:
             st.error(f"Error Crítico: {e}")
             logger.error(f"Error en Streamlit: {e}", exc_info=True)
-            # --- FIX 3 (V24.1): NO borrar el estado para poder debuggear ---
-            # st.session_state.clear() 
+            # No limpiar el estado para poder debuggear
 
 else:
     st.info("Cargue un archivo .xlsm para comenzar.")
