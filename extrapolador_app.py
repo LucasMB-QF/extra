@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 ARCHIVOS_CON_LIMITE = ["1. OQ_MAPEO.xlsm", "4. PQ_RUTA_20.xlsm", "5. PQ_RUTA_80.xlsm"]
 HOJAS_A_IGNORAR = ["CONSOLIDADO", "GRAFICOS", "RESUMEN", "TABLA", "RESULTADOS", "SUMMARY", "GRAFICO"] 
 
-# --- CONFIGURACIÓN BASE (Presets V23/V24) ---
+# --- CONFIGURACIÓN BASE (Presets V24) ---
 CONFIGURACION_BASE = {
     "OQ Mapeo": {
         "archivo": "1. OQ MAPEO 72 INV.xlsm",        
@@ -126,41 +126,32 @@ def aplicar_edicion_seccion(datos_originales, inicio_idx, fin_idx,
     if inicio_idx >= fin_idx or (fin_idx - inicio_idx) < 1:
         return datos_originales
     
-    # 1. Obtener la sección a editar
     seccion = datos_originales[inicio_idx:fin_idx+1].copy()
     
-    # --- Aplicar Pipeline de Sección ---
-    
     # 2. Escala de Picos (Sección)
-    if escala_picos_sec < 1.0: # 1.0 es el default (sin efecto)
+    if escala_picos_sec < 1.0: 
         seccion_limpia = medfilt(seccion, kernel_size=3)
         picos_seccion = seccion - seccion_limpia
         seccion = seccion_limpia + (picos_seccion * escala_picos_sec)
-
     # 3. Extrapolación (Sección)
-    if variacion_sec > 0.0: # 0.0 es el default (sin efecto)
+    if variacion_sec > 0.0: 
         curva_multi_sec = generar_curva_multiplicativa(len(seccion), variacion_sec, 0.5)
         seccion = seccion * curva_multi_sec
-
     # 4. Deriva (Sección)
-    if amplitud_sec > 0.0: # 0.0 es el default (sin efecto)
+    if amplitud_sec > 0.0: 
         deriva_sec = generar_deriva_gaussiana(len(seccion), amplitud_sec, sigma_sec, seed_sec)
         seccion = seccion + deriva_sec
-    
     # 5. Aplanado (Sección)
-    if aplanado_sec > 0.0: # 0.0 es el default (sin efecto)
+    if aplanado_sec > 0.0: 
         valor_inicio_sec = seccion[0]
         valor_fin_sec = seccion[-1]
         linea_recta_sec = np.linspace(valor_inicio_sec, valor_fin_sec, len(seccion))
         seccion = (seccion * (1.0 - aplanado_sec)) + (linea_recta_sec * aplanado_sec)
-        
     # 6. Offset (Sección)
     if offset_sec != 0.0:
         seccion = seccion + offset_sec
     
-    # 7. Reemplazar la sección en los datos editados
     datos_editados[inicio_idx:fin_idx+1] = seccion
-    
     return datos_editados
 
 
@@ -196,7 +187,7 @@ def generar_datos_con_ediciones_seccion(_datos_crudos_hoja, _config_por_dl, seed
                         datos_procesados,
                         edicion['inicio_idx'],
                         edicion['fin_idx'],
-                        edicion.get('offset_sec', 0.0), # V24.1 - Usar .get() para seguridad
+                        edicion.get('offset_sec', 0.0), 
                         edicion.get('aplanado_sec', 0.0),
                         edicion.get('escala_picos_sec', 1.0),
                         edicion.get('variacion_sec', 0.0),
@@ -396,9 +387,9 @@ def descargar_excel_modificado(wb_bytes, config_hojas, seed_value, file_name, pr
             return None
 
 # --- INTERFAZ DE STREAMLIT ---
-st.set_page_config(layout="wide", page_title="Extrapolador Maestro V25")
-st.title("Extrapolador Maestro V25 (Edición Persistente) 🚀") # Título V25
-st.info("Genera una extrapolación base, edita curvas individuales (los cambios se guardan) y aplica configs a todas.")
+st.set_page_config(layout="wide", page_title="Extrapolador Maestro V26")
+st.title("Extrapolador Maestro V26 (Híbrido) 🚀") # Título V26
+st.info("Genera una extrapolación base, edita curvas individuales (persistente) o selecciona 'Aplicar a TODAS' para sobrescribir.")
 
 # --- BARRA LATERAL (CONTROLES GLOBALES) ---
 st.sidebar.header("1. Carga de Archivo")
@@ -408,7 +399,7 @@ uploaded_file = st.sidebar.file_uploader("Cargar archivo .xlsm", type=["xlsm"])
 if 'ediciones_seccion' not in st.session_state:
     st.session_state.ediciones_seccion = {}
 
-# --- LÓGICA PRINCIPAL (V25) ---
+# --- LÓGICA PRINCIPAL (V26) ---
 if uploaded_file is not None:
     
     if st.session_state.get('file_name') != uploaded_file.name:
@@ -458,22 +449,28 @@ if uploaded_file is not None:
                 
                 dl_names = list(st.session_state.datos_crudos[hoja_seleccionada].keys())
                 
-                # --- V25 MEJORA: Dropdown solo con DLs ---
+                # --- V26 MEJORA: Restaurar "Aplicar a TODAS" ---
+                dl_names_con_opcion_global = ["Aplicar a TODAS"] + dl_names
                 dl_seleccionado = st.sidebar.selectbox(
                     "Curva a Editar:", 
-                    dl_names,
+                    dl_names_con_opcion_global,
                     key="dl_seleccionado_individual"
                 )
 
-                # --- V25 MEJORA: Config siempre es el DL seleccionado ---
-                dl_para_config = dl_seleccionado
+                # --- V26 MEJORA: Lógica de carga de sliders ---
+                if dl_seleccionado == "Aplicar a TODAS":
+                    # Si es "TODAS", usamos DL-1 como plantilla para mostrar valores
+                    dl_para_config = dl_names[0]
+                else:
+                    # Si es individual, usamos ese DL
+                    dl_para_config = dl_seleccionado
                 
                 if not dl_para_config or hoja_seleccionada not in st.session_state.config_hojas or dl_para_config not in st.session_state.config_hojas[hoja_seleccionada]:
                     st.sidebar.error(f"Error: No se encontró config para {hoja_seleccionada}. Intenta 'Generar Base' de nuevo.")
                 else:
                     config_actual = st.session_state.config_hojas[hoja_seleccionada][dl_para_config]
 
-                    # Sliders Globales
+                    # Sliders Globales (con keys únicas para cada modo)
                     escala_picos = st.sidebar.slider(
                         "Escala de Picos (Global)", 0.0, 1.0, config_actual["escala_picos"], 0.1, 
                         help="Controla la altura de los picos. 1.0 = original. 0.0 = picos eliminados.", 
@@ -503,26 +500,47 @@ if uploaded_file is not None:
                         help="Longitud de las 'ondas'. 3 = cortas. 20 = largas.", key=f"sigma_{dl_seleccionado}_{hoja_seleccionada}"
                     )
 
-                    # --- V25 MEJORA: Lógica de Actualización (solo actualiza 1 DL) ---
-                    dl_a_actualizar = [dl_seleccionado]
-                    
-                    for dl in dl_a_actualizar:
-                        st.session_state.config_hojas[hoja_seleccionada][dl]["escala_picos"] = escala_picos
-                        st.session_state.config_hojas[hoja_seleccionada][dl]["aplanado_global"] = aplanado_global
-                        st.session_state.config_hojas[hoja_seleccionada][dl]["variacion_percent"] = variacion_percent
-                        st.session_state.config_hojas[hoja_seleccionada][dl]["offset_base"] = offset_base
-                        st.session_state.config_hojas[hoja_seleccionada][dl]["amplitud"] = amplitud
-                        st.session_state.config_hojas[hoja_seleccionada][dl]["sigma"] = sigma
+                    # --- V26 MEJORA: Lógica de guardado Híbrida ---
+                    if dl_seleccionado == "Aplicar a TODAS":
+                        st.sidebar.markdown("---")
+                        # MODO GLOBAL: Mostrar botón, no guardar en tiempo real
+                        st.sidebar.warning("Estás en modo 'Aplicar a TODAS'. Los cambios no se guardarán hasta que hagas clic en el botón.")
+                        if st.sidebar.button(f"Aplicar estos ajustes a TODAS las curvas", type="primary"):
+                            # Recoger valores actuales de los sliders
+                            config_a_copiar = {
+                                "escala_picos": escala_picos,
+                                "aplanado_global": aplanado_global,
+                                "variacion_percent": variacion_percent,
+                                "offset_base": offset_base,
+                                "amplitud": amplitud,
+                                "sigma": sigma,
+                                # Mantener valores que no se editan aquí
+                                "dl_nombre": "", 
+                                "punto_pico_frac": config_actual["punto_pico_frac"] 
+                            }
+                            
+                            for dl_name in dl_names:
+                                # Copiamos la config actual a todas las demás
+                                st.session_state.config_hojas[hoja_seleccionada][dl_name]["escala_picos"] = config_a_copiar["escala_picos"]
+                                st.session_state.config_hojas[hoja_seleccionada][dl_name]["aplanado_global"] = config_a_copiar["aplanado_global"]
+                                st.session_state.config_hojas[hoja_seleccionada][dl_name]["variacion_percent"] = config_a_copiar["variacion_percent"]
+                                st.session_state.config_hojas[hoja_seleccionada][dl_name]["offset_base"] = config_a_copiar["offset_base"]
+                                st.session_state.config_hojas[hoja_seleccionada][dl_name]["amplitud"] = config_a_copiar["amplitud"]
+                                st.session_state.config_hojas[hoja_seleccionada][dl_name]["sigma"] = config_a_copiar["sigma"]
+                            
+                            st.toast(f"¡Ajustes aplicados a TODAS las curvas de {hoja_seleccionada}!")
+                            st.rerun() # Forzamos rerun para que los gráficos se actualicen
 
-                    # --- V25 MEJORA: Botón para "Aplicar a Todas" ---
-                    st.sidebar.markdown("---")
-                    if st.sidebar.button(f"Aplicar ajustes de {dl_seleccionado} a TODAS", type="primary"):
-                        config_a_copiar = st.session_state.config_hojas[hoja_seleccionada][dl_seleccionado]
-                        for dl_name in dl_names:
-                            # Copiamos la config actual a todas las demás
-                            st.session_state.config_hojas[hoja_seleccionada][dl_name] = config_a_copiar.copy()
-                        st.toast(f"¡Ajustes de {dl_seleccionado} aplicados a TODAS las curvas de {hoja_seleccionada}!")
-                        st.rerun() # Forzamos rerun para que los gráficos se actualicen
+                    else:
+                        # MODO INDIVIDUAL: Guardar en tiempo real (como V25)
+                        dl_a_actualizar = [dl_seleccionado]
+                        for dl in dl_a_actualizar:
+                            st.session_state.config_hojas[hoja_seleccionada][dl]["escala_picos"] = escala_picos
+                            st.session_state.config_hojas[hoja_seleccionada][dl]["aplanado_global"] = aplanado_global
+                            st.session_state.config_hojas[hoja_seleccionada][dl]["variacion_percent"] = variacion_percent
+                            st.session_state.config_hojas[hoja_seleccionada][dl]["offset_base"] = offset_base
+                            st.session_state.config_hojas[hoja_seleccionada][dl]["amplitud"] = amplitud
+                            st.session_state.config_hojas[hoja_seleccionada][dl]["sigma"] = sigma
 
 
                     # --- Editor de Sección Específica (V24) ---
