@@ -613,15 +613,77 @@ if uploaded_file is not None:
                         df_orig = pd.DataFrame(st.session_state.datos_crudos[hoja_seleccionada])
                         
                         # Generar datos extrapolados con ediciones de sección
-# --- Generar Gráficos ---
-with st.spinner("Actualizando gráficos en tiempo real..."):
-    df_orig = pd.DataFrame(st.session_state.datos_crudos[hoja_seleccionada])
-    
-    # Generar datos extrapolados con ediciones de sección
-    df_ext = generar_datos_con_ediciones_seccion(
-        st.session_state.datos_crudos[hoja_seleccionada], 
-        st.session_state.config_hojas[hoja_seleccionada], 
-        seed_value,
-        st.session_state.ediciones_seccion.get(hoja_seleccionada, {})  # Añadir esta línea
-    )  # <-- CERRAR EL PARÉNTESIS AQUÍ
-                           
+                                            # --- Generar Gráficos ---
+                    with st.spinner("Actualizando gráficos en tiempo real..."):
+                        df_orig = pd.DataFrame(st.session_state.datos_crudos[hoja_seleccionada])
+                        
+                        # Generar datos extrapolados con ediciones de sección
+                        df_ext = generar_datos_con_ediciones_seccion(
+                            st.session_state.datos_crudos[hoja_seleccionada], 
+                            st.session_state.config_hojas[hoja_seleccionada], 
+                            seed_value,
+                            st.session_state.ediciones_seccion.get(hoja_seleccionada, {})
+                        )
+
+                    # --- Área Principal (Gráficos) ---
+                    st.header(f"Visualización (Hoja: {hoja_seleccionada})")
+                    
+                    limite_min, limite_max = None, None
+                    titulo_grafico = "Original"
+                    titulo_graf_ext = f"Extrapolado (Versión {seed_value})"
+                    
+                    if "%HR" not in hoja_seleccionada.upper() and "HUM" not in hoja_seleccionada.upper():
+                        limite_min, limite_max = 15, 25
+                        titulo_grafico = "Temperatura Original"
+                        titulo_graf_ext = f"Temperatura Extrapolada (Versión {seed_value})"
+                    else:
+                        titulo_grafico = "Humedad Original"
+                        titulo_graf_ext = f"Humedad Extrapolada (Versión {seed_value})"
+
+                    # Preparar información de sección seleccionada para el gráfico
+                    seccion_seleccionada = None
+                    if 'inicio_seccion' in st.session_state and 'fin_seccion' in st.session_state:
+                        seccion_seleccionada = {
+                            'inicio': st.session_state.inicio_seccion,
+                            'fin': st.session_state.fin_seccion
+                        }
+
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        dibujar_grafico_con_limites(df_orig, titulo_grafico, limite_max, limite_min)
+                    with col2:
+                        dibujar_grafico_con_limites(df_ext, titulo_graf_ext, limite_max, limite_min, seccion_seleccionada)
+                    
+                    # --- Botón de Descarga ---
+                    st.sidebar.header("6. Descarga")
+                    if st.sidebar.button(f"Generar y Descargar Excel (Versión {seed_value})"):
+                        processed_bytes = descargar_excel_modificado(
+                            st.session_state['original_file_bytes'], 
+                            st.session_state.config_hojas, 
+                            seed_value,
+                            uploaded_file.name,
+                            CONFIGURACION_BASE[preset_name]["archivo"],
+                            st.session_state.ediciones_seccion  # Pasar las ediciones de sección
+                        )
+                        if processed_bytes:
+                            st.sidebar.download_button(
+                                label="¡Descarga Lista! (Haz clic aquí)",
+                                data=processed_bytes,
+                                file_name=f"extrapolado_v{seed_value}_{uploaded_file.name}",
+                                mime="application/vnd.ms-excel.sheet.macroEnabled.12",
+                                key="download_button"
+                            )
+                            st.sidebar.success("¡Archivo listo para descargar!")
+                            # Forzar un rerun para que el botón de descarga aparezca
+                            st.rerun()
+
+        except Exception as e:
+            st.error(f"Error Crítico: {e}")
+            logger.error(f"Error en Streamlit: {e}", exc_info=True)
+            st.session_state.clear()
+
+# --- V19 CORRECCIÓN: Mover el 'else' final al nivel correcto ---
+else:
+    # Pantalla inicial si no hay archivo
+    st.info("Cargue un archivo .xlsm para comenzar.")
+    st.session_state.clear()
