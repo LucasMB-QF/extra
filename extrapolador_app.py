@@ -7,8 +7,9 @@ import logging
 import numpy as np
 import pandas as pd
 import io
-from scipy.signal import medfilt  # (Paso 1) Para limpiar picos
-from scipy.ndimage import gaussian_filter1d # (Paso 3) Para deriva suave
+import altair as alt  # <-- Nueva librería para gráficos
+from scipy.signal import medfilt
+from scipy.ndimage import gaussian_filter1d
 
 # --- Configuración de Logging ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -147,17 +148,116 @@ def leer_datos_para_grafico(wb_bytes, hoja_nombre):
                 if len(valores) > 20:
                     datos_completos[header_value.strip()] = valores
 
+        # Alinear longitudes si es necesario
         return pd.DataFrame(dict([(k,pd.Series(v)) for k,v in datos_completos.items()]))
     except Exception as e:
         logger.error(f"Error leyendo {hoja_nombre}: {e}")
         return pd.DataFrame()
 
 
-# --- FUNCIÓN DE MODIFICACIÓN PRINCIPAL (V13 - CON SEMILLA) ---
-#@st.cache_data(show_spinner=False) # No podemos cachear esto, necesita recalcularse
-def modificar_workbook_en_memoria(wb_bytes, config, seed_value):
-    """Modifica un objeto workbook de openpyxl en memoria. Devuelve el wb modificado."""
+# --- (NUEVO V15) FUNCIÓN PARA DIBUJAR GRÁFICOS ---
+@st.cache_data(show_spinner=False)
+def dibujar_grafico_con_limites(df, titulo, limite_max=None, limite_min=None):
+    """Crea un gráfico Altair con límites opcionales."""
+    if df.empty:
+        return None
+
+    # 1. Convertir DataFrame de ancho a largo
+    df_largo = df.reset_index().melt('index', var_name='Sensor', value_name='Valor')
     
+    # 2. Crear el gráfico de líneas principal
+    base = alt.Chart(df_largo).encode(
+        x=alt.X('index', title='Índice de Tiempo'),
+        y=alt.Y('Valor', title=titulo),
+        color=alt.Color('Sensor', title="Sensores"),
+        tooltip=['index', 'Sensor', 'Valor']
+    ).properties(
+        title=titulo
+    )
+    
+    lineas = base.mark_line(point=False).interactive()
+    
+    # 3. Añadir líneas de límite si se proporcionan
+    grafico_final = lineas
+    
+    if limite_max is not None:
+        linea_max = alt.Chart(pd.DataFrame({'y': [limite_max]})) \
+            .mark_rule(color='red', strokeDash=[5, 2]) \
+            .encode(y='y')
+        grafico_final = grafico_final + linea_max
+
+    if limite_min is not None:
+        linea_min = alt.Chart(pd.DataFrame({'y': [limite_min]})) \
+            .mark_rule(color='red', strokeDash=[5, 2]) \
+            .encode(y='y')
+        grafico_final = grafico_final + linea_min
+        
+    return grafico_final
+
+
+# --- (NUEVO V15) FUNCIÓN DE PREVISUALIZACIÓN OPTIMIZADA ---
+@st.cache_data(show_spinner=False)
+def generar_datos_preview(_df_original, config, seed_value):
+    """
+    Toma un DataFrame y aplica el pipeline V13 solo para previsualización.
+    Es mucho más rápido que modificar todo el Excel.
+    """
+    df_modificado = _df_original.copy()
+    
+    # --- Aplicar Semilla ---
+    random.seed(seed_value)
+    np.random.seed(seed_value)
+
+    # Extraer parámetros
+    variacion_min = config.get("variacion_min")
+    variacion_max = config.get("variacion_max")
+    amplitud_deriva = config.get("amplitud")
+    sigma_suavizado = config.get("sigma")
+    punto_pico_frac = config.get("punto_pico")
+    offset_min = config.get("offset_min")
+    offset_max = config.get("offset_max")
+    prob_limpieza = config.get("prob_limpieza_picos")
+    
+    for col_nombre in df_modificado.columns:
+        if not col_nombre.strip().upper().startswith("DL"):
+            continue
+            
+        datos_np = df_modificado[col_nombre].dropna().values
+        longitud_actual = len(datos_np)
+        
+        if longitud_actual < 20:
+            continue
+
+        # --- INICIO PIPELINE V13 ---
+        # PASO 1: LIMPIEZA
+        if random.random() < prob_limpieza:
+            datos_base = medfilt(datos_np, kernel_size=3)
+        else:
+            datos_base = datos_np
+
+        # PASO 2: EXTRAPOLACIÓN
+        variacion_multi_dl = random.uniform(variacion_min, variacion_max)
+        curva_multi_dl = generar_curva_multiplicativa(longitud_actual, variacion_multi_dl, punto_pico_frac)
+        datos_extrapolados = datos_base * curva_multi_dl
+        
+        # PASO 3: DERIVA
+        deriva = generar_deriva_gaussiana(longitud_actual, amplitud_deriva, sigma_suavizado)
+        datos_con_deriva = datos_extrapolados + deriva
+        
+        # PASO 4: OFFSET
+        offset_base_dl = random.uniform(offset_min, offset_max)
+        datos_finales = datos_con_deriva + offset_base_dl
+        
+        # Sobrescribir la columna (alineando con el índice original)
+        df_modificado[col_nombre] = pd.Series(datos_finales, index=df_modificado[col_nombre].dropna().index)
+
+    return df_modificado
+
+
+# --- FUNCIÓN DE MODIFICACIÓN PRINCIPAL (Para Descarga) ---
+# (Esta es la V13 original, que es más lenta pero modifica el Excel real)
+def modificar_workbook_completo(wb_bytes, config, seed_value):
+    """Modifica el workbook completo para la descarga."""
     random.seed(seed_value)
     np.random.seed(seed_value)
     
@@ -173,121 +273,76 @@ def modificar_workbook_en_memoria(wb_bytes, config, seed_value):
     prob_limpieza = config.get("prob_limpieza_picos")
     aplicar_limite = any(nombre in config["archivo"] for nombre in ARCHIVOS_CON_LIMITE)
 
-    logger.info(f"Iniciando Pipeline V13 (Semilla: {seed_value})...")
+    logger.info(f"Iniciando Pipeline V13 COMPLETO (Semilla: {seed_value})...")
 
     for hoja_nombre in wb.sheetnames:
         if any(ignorar in hoja_nombre.strip().upper() for ignorar in HOJAS_A_IGNORAR):
             continue
-        
         ws = wb[hoja_nombre]
-
         for col in ws.iter_cols(min_row=1):
             header_cell = col[0]
             header_value = header_cell.value
-            
             if not (isinstance(header_value, str) and header_value.strip().upper().startswith("DL")):
                 continue
-
             celdas_datos, valores_originales, tipos_originales = [], [], []
-            
             for cell in col[1:]:
                 if isinstance(cell.value, (int, float)) and cell.data_type != 'f':
                     celdas_datos.append(cell)
                     valores_originales.append(cell.value)
                     tipos_originales.append(type(cell.value))
+            if len(valores_originales) < 20: continue
             
-            if len(valores_originales) < 20:
-                continue
-
             logger.info(f"    > PROCESANDO: '{hoja_nombre}' -> '{header_value.strip()}' (Semilla: {seed_value})")
-            
             datos_np = np.array(valores_originales)
             longitud_actual = len(datos_np)
 
-            # --- INICIO PIPELINE V12 (que ahora es V13 gracias a la semilla) ---
-            
-            # PASO 1: LIMPIEZA DE PICOS (Probabilística)
-            if random.random() < prob_limpieza:
-                datos_base = medfilt(datos_np, kernel_size=3)
-            else:
-                datos_base = datos_np
-
-            # PASO 2: EXTRAPOLACIÓN TEMPORAL (Aleatoria por DL)
+            # --- INICIO PIPELINE V13 ---
+            if random.random() < prob_limpieza: datos_base = medfilt(datos_np, kernel_size=3)
+            else: datos_base = datos_np
             variacion_multi_dl = random.uniform(variacion_min, variacion_max)
             curva_multi_dl = generar_curva_multiplicativa(longitud_actual, variacion_multi_dl, punto_pico_frac)
             datos_extrapolados = datos_base * curva_multi_dl
-            
-            # PASO 3: DERIVA DE REALISMO (Única por columna)
             deriva = generar_deriva_gaussiana(longitud_actual, amplitud_deriva, sigma_suavizado)
             datos_con_deriva = datos_extrapolados + deriva
-            
-            # PASO 4: APLICAR OFFSET BASE (Aleatorio por columna)
             offset_base_dl = random.uniform(offset_min, offset_max)
             datos_finales = datos_con_deriva + offset_base_dl
-            
-            # PASO 5: APLICAR LÍMITE
-            if aplicar_limite:
-                np.clip(datos_finales, a_min=None, a_max=25.5, out=datos_finales)
-            
-            # PASO 6: Escribir datos de vuelta
+            if aplicar_limite: np.clip(datos_finales, a_min=None, a_max=25.5, out=datos_finales)
+            # --- FIN PIPELINE V13 ---
+
             for i, cell in enumerate(celdas_datos):
                 nuevo_valor = datos_finales[i]
                 tipo_original = tipos_originales[i]
-                
-                if tipo_original == int:
-                    cell.value = int(round(nuevo_valor))
+                if tipo_original == int: cell.value = int(round(nuevo_valor))
                 else:
-                    try:
-                        decimales = len(str(valores_originales[i]).split('.')[1])
-                    except:
-                        decimales = 2
+                    try: decimales = len(str(valores_originales[i]).split('.')[1])
+                    except: decimales = 2
                     cell.value = round(nuevo_valor, decimales)
-
-    logger.info(f"Pipeline V13 (Semilla: {seed_value}) completado.")
-    # Guardar el workbook modificado en un objeto de bytes
+    
+    logger.info(f"Pipeline V13 COMPLETO (Semilla: {seed_value}) completado.")
     with io.BytesIO() as f:
         wb.save(f)
         return f.getvalue()
 
 # --- INTERFAZ DE STREAMLIT ---
 
-st.set_page_config(layout="wide", page_title="Extrapolador Maestro V14")
-st.title("Extrapolador Maestro V14 🚀")
-st.info("Esta aplicación utiliza el pipeline V12 con una **semilla aleatoria (Número de Versión)** para controlar la aleatoriedad.")
+st.set_page_config(layout="wide", page_title="Extrapolador Maestro V15")
+st.title("Extrapolador Maestro V15 🚀")
+st.info("Esta aplicación utiliza el pipeline V12/13 con **actualización en tiempo real** y **límites visuales**.")
 
 # --- BARRA LATERAL (CONTROLES) ---
-
 st.sidebar.header("1. Carga de Archivo")
 uploaded_file = st.sidebar.file_uploader("Cargar archivo .xlsm", type=["xlsm"])
 
 # Inicializar session_state
-if 'processed_file_bytes' not in st.session_state:
-    st.session_state['processed_file_bytes'] = None
 if 'original_file_bytes' not in st.session_state:
     st.session_state['original_file_bytes'] = None
-if 'chart_data_original' not in st.session_state:
-    st.session_state['chart_data_original'] = None
-if 'chart_data_extrapolado' not in st.session_state:
-    st.session_state['chart_data_extrapolado'] = None
-if 'sheet_temp' not in st.session_state:
-    st.session_state['sheet_temp'] = ""
-if 'sheet_hr' not in st.session_state:
-    st.session_state['sheet_hr'] = ""
 
-
-# --- INICIO DEL BLOQUE LÓGICO ---
 if uploaded_file is not None:
-    
-    # Almacenar bytes originales en session_state (solo una vez)
-    # y limpiar si se sube un nuevo archivo
     if st.session_state.get('original_file_name') != uploaded_file.name:
          st.session_state['original_file_bytes'] = uploaded_file.getvalue()
          st.session_state['original_file_name'] = uploaded_file.name
-         # Limpiar datos procesados viejos
-         st.session_state['processed_file_bytes'] = None
-         st.session_state['chart_data_original'] = None
-         st.session_state['chart_data_extrapolado'] = None
-
+         # Forzar recarga de datos de gráficos
+         st.cache_data.clear()
 
     try: 
         wb_check = openpyxl.load_workbook(io.BytesIO(st.session_state['original_file_bytes']), read_only=True)
@@ -297,24 +352,18 @@ if uploaded_file is not None:
         default_hr_index = next((i for i, s in enumerate(sheet_names) if "%HR" in s or "HR" in s.upper() or "HUM" in s.upper()), 1 if len(sheet_names) > 1 else 0)
 
         st.sidebar.header("2. Selección de Gráficos")
-        st.session_state['sheet_temp'] = st.sidebar.selectbox(
-            "Hoja de Temperatura (T°) a Visualizar", 
-            sheet_names, 
-            index=default_temp_index
+        sheet_temp = st.sidebar.selectbox(
+            "Hoja de Temperatura (T°) a Visualizar", sheet_names, index=default_temp_index
         )
-        st.session_state['sheet_hr'] = st.sidebar.selectbox(
-            "Hoja de Humedad (%HR) a Visualizar", 
-            sheet_names, 
-            index=default_hr_index
+        sheet_hr = st.sidebar.selectbox(
+            "Hoja de Humedad (%HR) a Visualizar", sheet_names, index=default_hr_index
         )
 
         st.sidebar.header("3. Parámetros de Extrapolación")
         
         seed_value = st.sidebar.number_input(
             "Versión (Semilla Aleatoria)", 
-            value=1, 
-            min_value=1, 
-            step=1,
+            value=1, min_value=1, step=1,
             help="Cambia este número para generar un conjunto aleatorio diferente (ej. para otro vehículo). Mantenlo igual para reproducir el mismo resultado."
         )
         
@@ -356,118 +405,90 @@ if uploaded_file is not None:
             0.0, 1.0, config_base['prob_limpieza_picos'], 0.1,
             help="Probabilidad de que los picos anómalos (como 'caídas' de sensor) sean eliminados. 1.0 = 100% limpios. 0.0 = 100% originales."
         )
+        
+        # Guardar la configuración actual en un solo dict
+        config_personalizada = {
+            "archivo": config_base["archivo"],
+            "variacion_min": var_min_max[0],
+            "variacion_max": var_min_max[1],
+            "amplitud": amplitud,
+            "sigma": sigma,
+            "punto_pico": config_base["punto_pico"],
+            "offset_min": offset_min_max[0],
+            "offset_max": offset_max[1],
+            "prob_limpieza_picos": prob_limpieza
+        }
 
-        # --- V14: LÓGICA DE PROCESAMIENTO EN TIEMPO REAL ---
-        # No hay botón. Esto se ejecuta cada vez que un widget cambia.
-        with st.spinner("Actualizando extrapolación..."):
-            try:
-                # 1. Leer datos originales para los gráficos
-                st.session_state['chart_data_original'] = {
-                    st.session_state['sheet_temp']: leer_datos_para_grafico(st.session_state['original_file_bytes'], st.session_state['sheet_temp']),
-                    st.session_state['sheet_hr']: leer_datos_para_grafico(st.session_state['original_file_bytes'], st.session_state['sheet_hr'])
-                }
-
-                # 2. Crear la configuración personalizada
-                config_personalizada = {
-                    "archivo": config_base["archivo"],
-                    "variacion_min": var_min_max[0],
-                    "variacion_max": var_min_max[1],
-                    "amplitud": amplitud,
-                    "sigma": sigma,
-                    "punto_pico": config_base["punto_pico"],
-                    "offset_min": offset_min_max[0],
-                    "offset_max": offset_min_max[1],
-                    "prob_limpieza_picos": prob_limpieza
-                }
-                
-                # 3. Modificar el workbook EN MEMORIA (pasando la semilla)
-                processed_bytes = modificar_workbook_en_memoria(st.session_state['original_file_bytes'], config_personalizada, seed_value)
-                st.session_state['processed_file_bytes'] = processed_bytes
-                
-                # 4. Leer datos modificados para los gráficos
-                st.session_state['chart_data_extrapolado'] = {
-                    st.session_state['sheet_temp']: leer_datos_para_grafico(processed_bytes, st.session_state['sheet_temp']),
-                    st.session_state['sheet_hr']: leer_datos_para_grafico(processed_bytes, st.session_state['sheet_hr'])
-                }
-                
-                # No necesitamos el st.success, es molesto en tiempo real
-
-            except Exception as e:
-                st.error(f"Error durante el procesamiento: {e}")
-                logger.error(f"Error en Streamlit: {e}", exc_info=True)
-
-        # Botón de descarga
-        if st.session_state['processed_file_bytes']:
-            st.sidebar.download_button(
-                label=f"Descargar Excel Modificado (Versión {seed_value})",
-                data=st.session_state['processed_file_bytes'],
-                file_name=f"extrapolado_v{seed_value}_{uploaded_file.name}",
-                mime="application/vnd.ms-excel.sheet.macroEnabled.12"
-            )
+        # --- GENERACIÓN DE GRÁFICOS (V15) ---
+        with st.spinner("Actualizando gráficos..."):
+            # Leer datos originales
+            df_orig_temp = leer_datos_para_grafico(st.session_state['original_file_bytes'], sheet_temp)
+            df_orig_hr = leer_datos_para_grafico(st.session_state['original_file_bytes'], sheet_hr)
             
+            # Generar datos de preview
+            df_ext_temp = generar_datos_preview(df_orig_temp, config_personalizada, seed_value)
+            df_ext_hr = generar_datos_preview(df_orig_hr, config_personalizada, seed_value)
+
+        # --- ÁREA PRINCIPAL (GRÁFICOS) ---
+        st.header(f"Visualización de Temperatura (Hoja: {sheet_temp})")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.subheader("Original")
+            chart_orig_temp = dibujar_grafico_con_limites(df_orig_temp, "Temperatura Original", 25, 15)
+            if chart_orig_temp: st.altair_chart(chart_orig_temp, use_container_width=True)
+            else: st.warning(f"No se encontraron datos 'DL' en la hoja '{sheet_temp}'.")
+        with col2:
+            st.subheader(f"Extrapolado (Versión {seed_value})")
+            chart_ext_temp = dibujar_grafico_con_limites(df_ext_temp, "Temperatura Extrapolada", 25, 15)
+            if chart_ext_temp: st.altair_chart(chart_ext_temp, use_container_width=True)
+            else: st.warning(f"No se pudieron generar datos para '{sheet_temp}'.")
+            
+        st.divider()
+        
+        st.header(f"Visualización de Humedad (Hoja: {sheet_hr})")
+        col3, col4 = st.columns(2)
+        with col3:
+            st.subheader("Original")
+            chart_orig_hr = dibujar_grafico_con_limites(df_orig_hr, "Humedad Original")
+            if chart_orig_hr: st.altair_chart(chart_orig_hr, use_container_width=True)
+            else: st.warning(f"No se encontraron datos 'DL' en la hoja '{sheet_hr}'.")
+        with col4:
+            st.subheader(f"Extrapolado (Versión {seed_value})")
+            chart_ext_hr = dibujar_grafico_con_limites(df_ext_hr, "Humedad Extrapolada")
+            if chart_ext_hr: st.altair_chart(chart_ext_hr, use_container_width=True)
+            else: st.warning(f"No se pudieron generar datos para '{sheet_hr}'.")
+
+        # --- BOTÓN DE DESCARGA (V15) ---
+        # Ahora el procesamiento pesado solo ocurre al hacer clic aquí
+        st.sidebar.header("4. Descarga")
+        if st.sidebar.button(f"Generar y Descargar Excel (Versión {seed_value})", type="primary"):
+            with st.spinner("Procesando archivo COMPLETO para descarga..."):
+                try:
+                    processed_bytes = modificar_workbook_completo(
+                        st.session_state['original_file_bytes'], 
+                        config_personalizada, 
+                        seed_value
+                    )
+                    
+                    # Ofrecer los bytes para descarga
+                    st.sidebar.download_button(
+                        label="¡Descarga Lista! (Haz clic aquí)",
+                        data=processed_bytes,
+                        file_name=f"extrapolado_v{seed_value}_{uploaded_file.name}",
+                        mime="application/vnd.ms-excel.sheet.macroEnabled.12"
+                    )
+                    st.sidebar.success("¡Archivo listo para descargar!")
+                except Exception as e:
+                    st.sidebar.error(f"Error al generar archivo: {e}")
+                    logger.error(f"Error en descarga: {e}", exc_info=True)
+
     except Exception as e:
-        st.error(f"Error al cargar el archivo: {e}")
+        st.error(f"Error Crítico al cargar el archivo: {e}")
         st.warning("El archivo puede estar dañado, protegido con contraseña o no ser un .xlsm válido.")
         logger.error(f"Error en Streamlit al leer el archivo: {e}", exc_info=True)
-        st.session_state['original_file_bytes'] = None
-        st.session_state['processed_file_bytes'] = None
-        st.session_state['chart_data_original'] = None
-        st.session_state['chart_data_extrapolado'] = None
+        st.session_state['original_file_bytes'] = None # Resetear
 
 else:
     # Pantalla inicial
     st.info("Cargue un archivo .xlsm para comenzar.")
-    st.session_state['processed_file_bytes'] = None
     st.session_state['original_file_bytes'] = None
-    st.session_state['chart_data_original'] = None
-    st.session_state['chart_data_extrapolado'] = None
-
-# --- ÁREA PRINCIPAL (GRÁFICOS) ---
-if st.session_state['chart_data_original'] is not None and st.session_state['chart_data_extrapolado'] is not None:
-    
-    version_display = "N/A"
-    try:
-        # Esto solo funcionará si el bloque 'if uploaded_file' se ejecutó
-        version_display = seed_value
-    except NameError:
-        pass # Mantener "N/A" si la semilla no está definida
-
-    st.header(f"Visualización de Temperatura (Hoja: {st.session_state['sheet_temp']})")
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.subheader("Original")
-        df_orig_temp = st.session_state['chart_data_original'].get(st.session_state['sheet_temp'])
-        if df_orig_temp is not None and not df_orig_temp.empty:
-            st.line_chart(df_orig_temp)
-        else:
-            st.warning(f"No se encontraron datos 'DL' en la hoja '{st.session_state['sheet_temp']}'.")
-
-    with col2:
-        st.subheader(f"Extrapolado (Versión {version_display})")
-        df_ext_temp = st.session_state['chart_data_extrapolado'].get(st.session_state['sheet_temp'])
-        if df_ext_temp is not None and not df_ext_temp.empty:
-            st.line_chart(df_ext_temp)
-        else:
-            st.warning(f"No se pudieron generar datos para '{st.session_state['sheet_temp']}'.")
-            
-    st.divider()
-    
-    st.header(f"Visualización de Humedad (Hoja: {st.session_state['sheet_hr']})")
-    col3, col4 = st.columns(2)
-    
-    with col3:
-        st.subheader("Original")
-        df_orig_hr = st.session_state['chart_data_original'].get(st.session_state['sheet_hr'])
-        if df_orig_hr is not None and not df_orig_hr.empty:
-            st.line_chart(df_orig_hr)
-        else:
-            st.warning(f"No se encontraron datos 'DL' en la hoja '{st.session_state['sheet_hr']}'.")
-
-    with col4:
-        st.subheader(f"Extrapolado (Versión {version_display})")
-        df_ext_hr = st.session_state['chart_data_extrapolado'].get(st.session_state['sheet_hr'])
-        if df_ext_hr is not None and not df_ext_hr.empty:
-            st.line_chart(df_ext_hr)
-        else:
-            st.warning(f"No se pudieron generar datos para '{st.session_state['sheet_hr']}'.")
