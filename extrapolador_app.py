@@ -501,46 +501,16 @@ if uploaded_file is not None:
                     )
 
                     # --- V26 MEJORA: Lógica de guardado Híbrida ---
-                    if dl_seleccionado == "Aplicar a TODAS":
-                        st.sidebar.markdown("---")
-                        # MODO GLOBAL: Mostrar botón, no guardar en tiempo real
-                        st.sidebar.warning("Estás en modo 'Aplicar a TODAS'. Los cambios no se guardarán hasta que hagas clic en el botón.")
-                        if st.sidebar.button(f"Aplicar estos ajustes a TODAS las curvas", type="primary"):
-                            # Recoger valores actuales de los sliders
-                            config_a_copiar = {
-                                "escala_picos": escala_picos,
-                                "aplanado_global": aplanado_global,
-                                "variacion_percent": variacion_percent,
-                                "offset_base": offset_base,
-                                "amplitud": amplitud,
-                                "sigma": sigma,
-                                # Mantener valores que no se editan aquí
-                                "dl_nombre": "", 
-                                "punto_pico_frac": config_actual["punto_pico_frac"] 
-                            }
-                            
-                            for dl_name in dl_names:
-                                # Copiamos la config actual a todas las demás
-                                st.session_state.config_hojas[hoja_seleccionada][dl_name]["escala_picos"] = config_a_copiar["escala_picos"]
-                                st.session_state.config_hojas[hoja_seleccionada][dl_name]["aplanado_global"] = config_a_copiar["aplanado_global"]
-                                st.session_state.config_hojas[hoja_seleccionada][dl_name]["variacion_percent"] = config_a_copiar["variacion_percent"]
-                                st.session_state.config_hojas[hoja_seleccionada][dl_name]["offset_base"] = config_a_copiar["offset_base"]
-                                st.session_state.config_hojas[hoja_seleccionada][dl_name]["amplitud"] = config_a_copiar["amplitud"]
-                                st.session_state.config_hojas[hoja_seleccionada][dl_name]["sigma"] = config_a_copiar["sigma"]
-                            
-                            st.toast(f"¡Ajustes aplicados a TODAS las curvas de {hoja_seleccionada}!")
-                            st.rerun() # Forzamos rerun para que los gráficos se actualicen
-
-                    else:
-                        # MODO INDIVIDUAL: Guardar en tiempo real (como V25)
-                        dl_a_actualizar = [dl_seleccionado]
-                        for dl in dl_a_actualizar:
-                            st.session_state.config_hojas[hoja_seleccionada][dl]["escala_picos"] = escala_picos
-                            st.session_state.config_hojas[hoja_seleccionada][dl]["aplanado_global"] = aplanado_global
-                            st.session_state.config_hojas[hoja_seleccionada][dl]["variacion_percent"] = variacion_percent
-                            st.session_state.config_hojas[hoja_seleccionada][dl]["offset_base"] = offset_base
-                            st.session_state.config_hojas[hoja_seleccionada][dl]["amplitud"] = amplitud
-                            st.session_state.config_hojas[hoja_seleccionada][dl]["sigma"] = sigma
+                    # --- V27: REVERTIDA A V24.1 para feedback en tiempo real ---
+                    dl_a_actualizar = dl_names if dl_seleccionado == "Aplicar a TODAS" else [dl_seleccionado]
+                    
+                    for dl in dl_a_actualizar:
+                        st.session_state.config_hojas[hoja_seleccionada][dl]["escala_picos"] = escala_picos
+                        st.session_state.config_hojas[hoja_seleccionada][dl]["aplanado_global"] = aplanado_global
+                        st.session_state.config_hojas[hoja_seleccionada][dl]["variacion_percent"] = variacion_percent
+                        st.session_state.config_hojas[hoja_seleccionada][dl]["offset_base"] = offset_base
+                        st.session_state.config_hojas[hoja_seleccionada][dl]["amplitud"] = amplitud
+                        st.session_state.config_hojas[hoja_seleccionada][dl]["sigma"] = sigma
 
 
                     # --- Editor de Sección Específica (V24) ---
