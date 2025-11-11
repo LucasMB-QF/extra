@@ -155,6 +155,79 @@ def aplicar_pipeline_a_columna(datos_np, config_dl, seed):
     
     return datos_finales
 
+# --- NUEVAS FUNCIONES PARA EDICIÓN DE SECCIÓN ---
+
+def aplicar_edicion_seccion(datos_originales, inicio_idx, fin_idx, ajuste_offset, ajuste_factor):
+    """
+    Aplica edición a una sección específica de los datos.
+    
+    Args:
+        datos_originales: Array numpy con los datos originales
+        inicio_idx: Índice de inicio de la sección a editar
+        fin_idx: Índice de fin de la sección a editar
+        ajuste_offset: Valor a sumar/restar a la sección
+        ajuste_factor: Factor por el que multiplicar la sección
+    
+    Returns:
+        Array numpy con la sección editada
+    """
+    datos_editados = datos_originales.copy()
+    
+    # Asegurarse de que los índices estén dentro de los límites
+    inicio_idx = max(0, min(inicio_idx, len(datos_originales)-1))
+    fin_idx = max(0, min(fin_idx, len(datos_originales)-1))
+    
+    if inicio_idx >= fin_idx:
+        return datos_originales
+    
+    # Aplicar transformaciones a la sección seleccionada
+    seccion = datos_originales[inicio_idx:fin_idx+1]
+    
+    # Aplicar multiplicación primero
+    seccion_ajustada = seccion * ajuste_factor
+    
+    # Luego aplicar offset
+    seccion_ajustada = seccion_ajustada + ajuste_offset
+    
+    # Reemplazar la sección en los datos editados
+    datos_editados[inicio_idx:fin_idx+1] = seccion_ajustada
+    
+    return datos_editados
+
+def generar_datos_con_ediciones_seccion(_datos_crudos_hoja, _config_por_dl, seed_value, ediciones_seccion):
+    """
+    Genera datos extrapolados aplicando también ediciones de sección.
+    
+    Args:
+        _datos_crudos_hoja: Datos originales de la hoja
+        _config_por_dl: Configuración por DL
+        seed_value: Semilla para reproducibilidad
+        ediciones_seccion: Dict con ediciones de sección por DL
+    
+    Returns:
+        DataFrame con datos extrapolados y ediciones aplicadas
+    """
+    datos_extrapolados = {}
+    
+    for dl_nombre, datos_originales in _datos_crudos_hoja.items():
+        if dl_nombre in _config_por_dl:
+            config_dl = _config_por_dl[dl_nombre]
+            # Primero aplicar el pipeline normal
+            datos_extrapolados[dl_nombre] = aplicar_pipeline_a_columna(datos_originales, config_dl, seed_value)
+            
+            # Luego aplicar ediciones de sección si existen
+            if dl_nombre in ediciones_seccion:
+                for edicion in ediciones_seccion[dl_nombre]:
+                    datos_extrapolados[dl_nombre] = aplicar_edicion_seccion(
+                        datos_extrapolados[dl_nombre],
+                        edicion['inicio_idx'],
+                        edicion['fin_idx'],
+                        edicion['ajuste_offset'],
+                        edicion['ajuste_factor']
+                    )
+    
+    return pd.DataFrame(dict([(k,pd.Series(v)) for k,v in datos_extrapolados.items()]))
+
 # --- FUNCIONES DE MANEJO DE DATOS ---
 
 @st.cache_data(show_spinner=False)
@@ -210,7 +283,7 @@ def generar_configuracion_inicial(datos_crudos, config_base, seed_value):
             
     return config_hojas
 
-#@st.cache_data(show_spinner=False) # No se puede cachear si depende de los sliders
+@st.cache_data(show_spinner=False)
 def generar_datos_extrapolados_df(_datos_crudos_hoja, _config_por_dl, seed_value):
     """Genera un DataFrame extrapolado basado en la configuración de cada DL."""
     datos_extrapolados = {}
@@ -223,8 +296,8 @@ def generar_datos_extrapolados_df(_datos_crudos_hoja, _config_por_dl, seed_value
     return pd.DataFrame(dict([(k,pd.Series(v)) for k,v in datos_extrapolados.items()]))
 
 
-def dibujar_grafico_con_limites(df, titulo, limite_max=None, limite_min=None):
-    """Crea un gráfico Altair con límites opcionales."""
+def dibujar_grafico_con_limites(df, titulo, limite_max=None, limite_min=None, seccion_seleccionada=None):
+    """Crea un gráfico Altair con límites opcionales y sección seleccionada."""
     if df.empty:
         return st.warning(f"No se encontraron datos 'DL' para el gráfico: {titulo}")
 
@@ -241,6 +314,22 @@ def dibujar_grafico_con_limites(df, titulo, limite_max=None, limite_min=None):
     lineas = base.mark_line(point=False).interactive()
     grafico_final = lineas
     
+    # Añadir área de sección seleccionada si existe
+    if seccion_seleccionada and 'inicio' in seccion_seleccionada and 'fin' in seccion_seleccionada:
+        area_seleccionada = alt.Chart(pd.DataFrame({
+            'x1': [seccion_seleccionada['inicio']],
+            'x2': [seccion_seleccionada['fin']]
+        })).mark_rect(
+            opacity=0.3,
+            color='yellow'
+        ).encode(
+            x='x1',
+            x2='x2',
+            y=alt.value(0),
+            y2=alt.value(400)  # Ajustar según el rango de datos
+        )
+        grafico_final = grafico_final + area_seleccionada
+    
     if limite_max is not None:
         linea_max = alt.Chart(pd.DataFrame({'y': [limite_max]})) \
             .mark_rule(color='red', strokeDash=[5, 2]) \
@@ -255,7 +344,7 @@ def dibujar_grafico_con_limites(df, titulo, limite_max=None, limite_min=None):
     return st.altair_chart(grafico_final, use_container_width=True)
 
 
-def descargar_excel_modificado(wb_bytes, config_hojas, seed_value, file_name, preset_archivo_base):
+def descargar_excel_modificado(wb_bytes, config_hojas, seed_value, file_name, preset_archivo_base, ediciones_seccion=None):
     """Función final para procesar y descargar el Excel."""
     with st.spinner("Generando archivo Excel completo... Esto puede tardar unos segundos."):
         try:
@@ -292,6 +381,17 @@ def descargar_excel_modificado(wb_bytes, config_hojas, seed_value, file_name, pr
                         
                         datos_finales = aplicar_pipeline_a_columna(datos_np, config_dl, seed_value)
                         
+                        # Aplicar ediciones de sección si existen
+                        if ediciones_seccion and hoja_nombre in ediciones_seccion and header_value in ediciones_seccion[hoja_nombre]:
+                            for edicion in ediciones_seccion[hoja_nombre][header_value]:
+                                datos_finales = aplicar_edicion_seccion(
+                                    datos_finales,
+                                    edicion['inicio_idx'],
+                                    edicion['fin_idx'],
+                                    edicion['ajuste_offset'],
+                                    edicion['ajuste_factor']
+                                )
+
                         # Aplicar Límite (solo si es T° y el preset lo requiere)
                         if aplicar_limite and ("%HR" not in hoja_nombre.upper() and "HUM" not in hoja_nombre.upper()):
                              np.clip(datos_finales, a_min=None, a_max=25.5, out=datos_finales)
@@ -316,15 +416,19 @@ def descargar_excel_modificado(wb_bytes, config_hojas, seed_value, file_name, pr
             return None
 
 # --- INTERFAZ DE STREAMLIT ---
-st.set_page_config(layout="wide", page_title="Extrapolador Maestro V18")
-st.title("Extrapolador Maestro V18 (Editor Híbrido) 🚀")
-st.info("Genera una extrapolación base y luego ajusta cada curva individualmente en tiempo real.")
+st.set_page_config(layout="wide", page_title="Extrapolador Maestro V19")
+st.title("Extrapolador Maestro V19 (Editor Híbrido + Secciones) 🚀")
+st.info("Genera una extrapolación base, ajusta cada curva individualmente y edita secciones específicas en tiempo real.")
 
 # --- BARRA LATERAL (CONTROLES GLOBALES) ---
 st.sidebar.header("1. Carga de Archivo")
 uploaded_file = st.sidebar.file_uploader("Cargar archivo .xlsm", type=["xlsm"])
 
-# --- LÓGICA PRINCIPAL (V18 - Corregida) ---
+# --- Inicializar estado de sesión para ediciones de sección ---
+if 'ediciones_seccion' not in st.session_state:
+    st.session_state.ediciones_seccion = {}  # Estructura: {hoja: {dl: [ediciones]}}
+
+# --- LÓGICA PRINCIPAL (V19 - Con edición de secciones) ---
 if uploaded_file is not None:
     
     # Cargar datos crudos solo si el archivo cambia
@@ -333,6 +437,7 @@ if uploaded_file is not None:
         st.session_state.file_name = uploaded_file.name
         st.session_state.original_file_bytes = uploaded_file.getvalue()
         if 'config_hojas' in st.session_state: del st.session_state.config_hojas
+        st.session_state.ediciones_seccion = {}  # Limpiar ediciones al cambiar archivo
         st.cache_data.clear() # Limpiar caché al subir nuevo archivo
 
     if not st.session_state.datos_crudos:
@@ -361,10 +466,11 @@ if uploaded_file is not None:
                     st.session_state.config_hojas = generar_configuracion_inicial(st.session_state.datos_crudos, config_base, seed_value)
                     st.session_state.last_seed = seed_value
                     st.session_state.last_preset = preset_name
+                    st.session_state.ediciones_seccion = {}  # Limpiar ediciones al regenerar
                     st.toast(f"Generada Versión {seed_value} con preset '{preset_name}'")
                     st.rerun() # Forzar rerun para mostrar los sliders
             
-            # --- V18 CORRECCIÓN: Lógica para manejar cambios de semilla/preset sin botón ---
+            # --- V19 CORRECCIÓN: Lógica para manejar cambios de semilla/preset sin botón ---
             if 'config_hojas' not in st.session_state or \
                st.session_state.get('last_seed') != seed_value or \
                st.session_state.get('last_preset') != preset_name:
@@ -387,7 +493,7 @@ if uploaded_file is not None:
                 else:
                     config_actual = st.session_state.config_hojas[hoja_seleccionada][dl_para_config]
 
-                    # Sliders
+                    # Sliders para edición completa
                     prob_limpieza = st.sidebar.slider(
                         "Limpieza de Picos", 0.0, 1.0, config_actual["prob_limpieza_picos"], 0.1, 
                         help="1.0 = 100% limpio. 0.0 = 100% original (con picos).", key=f"clean_{dl_seleccionado}_{hoja_seleccionada}"
@@ -419,62 +525,96 @@ if uploaded_file is not None:
                         st.session_state.config_hojas[hoja_seleccionada][dl]["amplitud"] = amplitud
                         st.session_state.config_hojas[hoja_seleccionada][dl]["sigma"] = sigma
 
+                    # --- NUEVO: EDITOR DE SECCIÓN ESPECÍFICA ---
+                    st.sidebar.header("5. Editor de Sección Específica")
+                    
+                    # Selector de DL para edición de sección (no permite "Aplicar a TODAS")
+                    dl_para_edicion_seccion = st.sidebar.selectbox(
+                        "Seleccionar DL para editar sección:", 
+                        dl_names,
+                        key="dl_edicion_seccion"
+                    )
+                    
+                    # Obtener longitud de datos para este DL
+                    longitud_datos = len(st.session_state.datos_crudos[hoja_seleccionada][dl_para_edicion_seccion])
+                    
+                    # Selectores de rango para la sección
+                    col1, col2 = st.sidebar.columns(2)
+                    with col1:
+                        inicio_seccion = st.slider(
+                            "Inicio sección", 
+                            0, longitud_datos-1, 
+                            max(0, longitud_datos//3),
+                            key="inicio_seccion"
+                        )
+                    with col2:
+                        fin_seccion = st.slider(
+                            "Fin sección", 
+                            0, longitud_datos-1, 
+                            min(longitud_datos-1, longitud_datos*2//3),
+                            key="fin_seccion"
+                        )
+                    
+                    # Controles de ajuste para la sección
+                    ajuste_offset_seccion = st.sidebar.slider(
+                        "Ajuste Vertical (Offset)", -2.0, 2.0, 0.0, 0.1,
+                        help="Sube o baja solo la sección seleccionada",
+                        key="ajuste_offset_seccion"
+                    )
+                    
+                    ajuste_factor_seccion = st.sidebar.slider(
+                        "Factor de Escala", 0.5, 2.0, 1.0, 0.1,
+                        help="Multiplica los valores de la sección por este factor",
+                        key="ajuste_factor_seccion"
+                    )
+                    
+                    # Botones para aplicar/limpiar edición de sección
+                    col_apply, col_clear = st.sidebar.columns(2)
+                    with col_apply:
+                        if st.button("Aplicar a Sección", type="secondary"):
+                            # Inicializar estructura si no existe
+                            if hoja_seleccionada not in st.session_state.ediciones_seccion:
+                                st.session_state.ediciones_seccion[hoja_seleccionada] = {}
+                            if dl_para_edicion_seccion not in st.session_state.ediciones_seccion[hoja_seleccionada]:
+                                st.session_state.ediciones_seccion[hoja_seleccionada][dl_para_edicion_seccion] = []
+                            
+                            # Añadir nueva edición
+                            nueva_edicion = {
+                                'inicio_idx': inicio_seccion,
+                                'fin_idx': fin_seccion,
+                                'ajuste_offset': ajuste_offset_seccion,
+                                'ajuste_factor': ajuste_factor_seccion
+                            }
+                            st.session_state.ediciones_seccion[hoja_seleccionada][dl_para_edicion_seccion].append(nueva_edicion)
+                            st.toast(f"Edición aplicada a {dl_para_edicion_seccion} en índices {inicio_seccion}-{fin_seccion}")
+                            st.rerun()
+                    
+                    with col_clear:
+                        if st.button("Limpiar Ediciones", type="secondary"):
+                            if hoja_seleccionada in st.session_state.ediciones_seccion:
+                                if dl_para_edicion_seccion in st.session_state.ediciones_seccion[hoja_seleccionada]:
+                                    st.session_state.ediciones_seccion[hoja_seleccionada][dl_para_edicion_seccion] = []
+                                    st.toast(f"Ediciones limpiadas para {dl_para_edicion_seccion}")
+                                    st.rerun()
+                    
+                    # Mostrar ediciones actuales
+                    if (hoja_seleccionada in st.session_state.ediciones_seccion and 
+                        dl_para_edicion_seccion in st.session_state.ediciones_seccion[hoja_seleccionada] and
+                        st.session_state.ediciones_seccion[hoja_seleccionada][dl_para_edicion_seccion]):
+                        
+                        st.sidebar.info("Ediciones activas:")
+                        for i, edicion in enumerate(st.session_state.ediciones_seccion[hoja_seleccionada][dl_para_edicion_seccion]):
+                            st.sidebar.write(f"{i+1}. Índices {edicion['inicio_idx']}-{edicion['fin_idx']}: "
+                                           f"Offset={edicion['ajuste_offset']:.2f}, "
+                                           f"Factor={edicion['ajuste_factor']:.2f}")
 
                     # --- Generar Gráficos ---
                     with st.spinner("Actualizando gráficos en tiempo real..."):
                         df_orig = pd.DataFrame(st.session_state.datos_crudos[hoja_seleccionada])
-                        df_ext = generar_datos_extrapolados_df(st.session_state.datos_crudos[hoja_seleccionada], st.session_state.config_hojas[hoja_seleccionada], seed_value)
-
-                    # --- Área Principal (Gráficos) ---
-                    st.header(f"Visualización (Hoja: {hoja_seleccionada})")
-                    
-                    limite_min, limite_max = None, None
-                    titulo_grafico = "Original"
-                    titulo_graf_ext = f"Extrapolado (Versión {seed_value})"
-                    
-                    if "%HR" not in hoja_seleccionada.upper() and "HUM" not in hoja_seleccionada.upper():
-                        limite_min, limite_max = 15, 25
-                        titulo_grafico = "Temperatura Original"
-                        titulo_graf_ext = f"Temperatura Extrapolada (Versión {seed_value})"
-                    else:
-                        titulo_grafico = "Humedad Original"
-                        titulo_graf_ext = f"Humedad Extrapolada (Versión {seed_value})"
-
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        dibujar_grafico_con_limites(df_orig, titulo_grafico, limite_max, limite_min)
-                    with col2:
-                        dibujar_grafico_con_limites(df_ext, titulo_graf_ext, limite_max, limite_min)
-                    
-                    # --- Botón de Descarga ---
-                    st.sidebar.header("5. Descarga")
-                    if st.sidebar.button(f"Generar y Descargar Excel (Versión {seed_value})"):
-                        processed_bytes = descargar_excel_modificado(
-                            st.session_state['original_file_bytes'], 
-                            st.session_state.config_hojas, 
+                        
+                        # Generar datos extrapolados con ediciones de sección
+                        df_ext = generar_datos_con_ediciones_seccion(
+                            st.session_state.datos_crudos[hoja_seleccionada], 
+                            st.session_state.config_hojas[hoja_seleccionada], 
                             seed_value,
-                            uploaded_file.name,
-                            CONFIGURACION_BASE[preset_name]["archivo"]
-                        )
-                        if processed_bytes:
-                            st.sidebar.download_button(
-                                label="¡Descarga Lista! (Haz clic aquí)",
-                                data=processed_bytes,
-                                file_name=f"extrapolado_v{seed_value}_{uploaded_file.name}",
-                                mime="application/vnd.ms-excel.sheet.macroEnabled.12",
-                                key="download_button"
-                            )
-                            st.sidebar.success("¡Archivo listo para descargar!")
-                            # Forzar un rerun para que el botón de descarga aparezca
-                            st.rerun()
-
-        except Exception as e:
-            st.error(f"Error Crítico: {e}")
-            logger.error(f"Error en Streamlit: {e}", exc_info=True)
-            st.session_state.clear()
-
-# --- V18 CORRECCIÓN: Mover el 'else' final al nivel correcto ---
-else:
-    # Pantalla inicial si no hay archivo
-    st.info("Cargue un archivo .xlsm para comenzar.")
-    st.session_state.clear()
+                           
