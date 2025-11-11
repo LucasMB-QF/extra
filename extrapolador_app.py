@@ -325,9 +325,9 @@ def modificar_workbook_completo(wb_bytes, config, seed_value):
 
 # --- INTERFAZ DE STREAMLIT ---
 
-st.set_page_config(layout="wide", page_title="Extrapolador Maestro V15")
-st.title("Extrapolador Maestro V15 🚀")
-st.info("Esta aplicación utiliza el pipeline V12/13 con **actualización en tiempo real** y **límites visuales**.")
+st.set_page_config(layout="wide", page_title="Extrapolador Maestro V15.1")
+st.title("Extrapolador Maestro V15.1 🚀")
+st.info("Esta aplicación utiliza el pipeline V13 con **actualización en tiempo real** y **límites visuales**.")
 
 # --- BARRA LATERAL (CONTROLES) ---
 st.sidebar.header("1. Carga de Archivo")
@@ -341,8 +341,7 @@ if uploaded_file is not None:
     if st.session_state.get('original_file_name') != uploaded_file.name:
          st.session_state['original_file_bytes'] = uploaded_file.getvalue()
          st.session_state['original_file_name'] = uploaded_file.name
-         # Forzar recarga de datos de gráficos
-         st.cache_data.clear()
+         st.cache_data.clear() # Limpiar caché al subir nuevo archivo
 
     try: 
         wb_check = openpyxl.load_workbook(io.BytesIO(st.session_state['original_file_bytes']), read_only=True)
@@ -415,7 +414,7 @@ if uploaded_file is not None:
             "sigma": sigma,
             "punto_pico": config_base["punto_pico"],
             "offset_min": offset_min_max[0],
-            "offset_max": offset_max[1],
+            "offset_max": offset_min_max[1], # <-- ¡¡AQUÍ ESTABA EL ERROR!!
             "prob_limpieza_picos": prob_limpieza
         }
 
@@ -459,7 +458,6 @@ if uploaded_file is not None:
             else: st.warning(f"No se pudieron generar datos para '{sheet_hr}'.")
 
         # --- BOTÓN DE DESCARGA (V15) ---
-        # Ahora el procesamiento pesado solo ocurre al hacer clic aquí
         st.sidebar.header("4. Descarga")
         if st.sidebar.button(f"Generar y Descargar Excel (Versión {seed_value})", type="primary"):
             with st.spinner("Procesando archivo COMPLETO para descarga..."):
@@ -470,7 +468,6 @@ if uploaded_file is not None:
                         seed_value
                     )
                     
-                    # Ofrecer los bytes para descarga
                     st.sidebar.download_button(
                         label="¡Descarga Lista! (Haz clic aquí)",
                         data=processed_bytes,
@@ -486,9 +483,8 @@ if uploaded_file is not None:
         st.error(f"Error Crítico al cargar el archivo: {e}")
         st.warning("El archivo puede estar dañado, protegido con contraseña o no ser un .xlsm válido.")
         logger.error(f"Error en Streamlit al leer el archivo: {e}", exc_info=True)
-        st.session_state['original_file_bytes'] = None # Resetear
+        st.session_state['original_file_bytes'] = None
 
 else:
-    # Pantalla inicial
     st.info("Cargue un archivo .xlsm para comenzar.")
     st.session_state['original_file_bytes'] = None
