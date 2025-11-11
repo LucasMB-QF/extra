@@ -316,30 +316,29 @@ def descargar_excel_modificado(wb_bytes, config_hojas, seed_value, file_name, pr
             return None
 
 # --- INTERFAZ DE STREAMLIT ---
-st.set_page_config(layout="wide", page_title="Extrapolador Maestro V18.1")
-st.title("Extrapolador Maestro V18.1 (Híbrido) 🚀")
+st.set_page_config(layout="wide", page_title="Extrapolador Maestro V18")
+st.title("Extrapolador Maestro V18 (Editor Híbrido) 🚀")
 st.info("Genera una extrapolación base y luego ajusta cada curva individualmente en tiempo real.")
 
 # --- BARRA LATERAL (CONTROLES GLOBALES) ---
 st.sidebar.header("1. Carga de Archivo")
 uploaded_file = st.sidebar.file_uploader("Cargar archivo .xlsm", type=["xlsm"])
 
-# --- LÓGICA PRINCIPAL (V18.1 - Corregida) ---
-try:
-    if uploaded_file is not None:
-        
-        # Cargar datos crudos solo si el archivo cambia
-        if st.session_state.get('file_name') != uploaded_file.name:
-            st.session_state.datos_crudos = leer_datos_crudos_excel(uploaded_file.getvalue())
-            st.session_state.file_name = uploaded_file.name
-            st.session_state.original_file_bytes = uploaded_file.getvalue()
-            if 'config_hojas' in st.session_state: del st.session_state.config_hojas
-            st.cache_data.clear() # Limpiar caché al subir nuevo archivo
+# --- LÓGICA PRINCIPAL (V18 - Corregida) ---
+if uploaded_file is not None:
+    
+    # Cargar datos crudos solo si el archivo cambia
+    if st.session_state.get('file_name') != uploaded_file.name:
+        st.session_state.datos_crudos = leer_datos_crudos_excel(uploaded_file.getvalue())
+        st.session_state.file_name = uploaded_file.name
+        st.session_state.original_file_bytes = uploaded_file.getvalue()
+        if 'config_hojas' in st.session_state: del st.session_state.config_hojas
+        st.cache_data.clear() # Limpiar caché al subir nuevo archivo
 
-        if not st.session_state.datos_crudos:
-            st.error("No se pudieron leer datos 'DL' válidos de este archivo. Revise el formato.")
-        else:
-            
+    if not st.session_state.datos_crudos:
+        st.error("No se pudieron leer datos 'DL' válidos de este archivo. Revise el formato.")
+    else:
+        try:
             available_sheets = list(st.session_state.datos_crudos.keys())
             st.sidebar.header("2. Hoja de Trabajo")
             
@@ -365,6 +364,7 @@ try:
                     st.toast(f"Generada Versión {seed_value} con preset '{preset_name}'")
                     st.rerun() # Forzar rerun para mostrar los sliders
             
+            # --- V18 CORRECCIÓN: Lógica para manejar cambios de semilla/preset sin botón ---
             if 'config_hojas' not in st.session_state or \
                st.session_state.get('last_seed') != seed_value or \
                st.session_state.get('last_preset') != preset_name:
@@ -449,16 +449,12 @@ try:
                     # --- Botón de Descarga ---
                     st.sidebar.header("5. Descarga")
                     if st.sidebar.button(f"Generar y Descargar Excel (Versión {seed_value})"):
-                        
-                        # --- V18.1 CORRECCIÓN: Pasar el nombre de archivo base del preset ---
-                        config_base_descarga = CONFIGURACION_BASE[preset_name]
-                        
                         processed_bytes = descargar_excel_modificado(
                             st.session_state['original_file_bytes'], 
                             st.session_state.config_hojas, 
                             seed_value,
                             uploaded_file.name,
-                            config_base_descarga["archivo"] # Pasar el nombre de archivo base
+                            CONFIGURACION_BASE[preset_name]["archivo"]
                         )
                         if processed_bytes:
                             st.sidebar.download_button(
@@ -472,12 +468,12 @@ try:
                             # Forzar un rerun para que el botón de descarga aparezca
                             st.rerun()
 
-    except Exception as e:
-        st.error(f"Error Crítico: {e}")
-        logger.error(f"Error en Streamlit: {e}", exc_info=True)
-        st.session_state.clear()
+        except Exception as e:
+            st.error(f"Error Crítico: {e}")
+            logger.error(f"Error en Streamlit: {e}", exc_info=True)
+            st.session_state.clear()
 
-# --- V18.1 CORRECCIÓN: Este 'else' está ahora en el lugar correcto ---
+# --- V18 CORRECCIÓN: Mover el 'else' final al nivel correcto ---
 else:
     # Pantalla inicial si no hay archivo
     st.info("Cargue un archivo .xlsm para comenzar.")
