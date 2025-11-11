@@ -250,8 +250,8 @@ def modificar_workbook_en_memoria(wb_bytes, config, seed_value):
 
 # --- INTERFAZ DE STREAMLIT ---
 
-st.set_page_config(layout="wide", page_title="Extrapolador Maestro V13.1")
-st.title("Extrapolador Maestro V13.1 🚀")
+st.set_page_config(layout="wide", page_title="Extrapolador Maestro V13.2")
+st.title("Extrapolador Maestro V13.2 🚀")
 st.info("Esta aplicación utiliza el pipeline V12 con una **semilla aleatoria (Número de Versión)** para controlar la aleatoriedad.")
 
 # --- BARRA LATERAL (CONTROLES) ---
@@ -273,15 +273,15 @@ if 'sheet_temp' not in st.session_state:
 if 'sheet_hr' not in st.session_state:
     st.session_state['sheet_hr'] = ""
 
-# --- INICIO DEL BLOQUE LÓGICO ---
-# (Este bloque 'if/else' reemplaza la estructura rota de V13.1)
+
+# --- INICIO DEL BLOQUE LÓGICO (V13.2 CORREGIDO) ---
 if uploaded_file is not None:
     
-    # Almacenar bytes originales en session_state
+    # Almacenar bytes originales en session_state (solo una vez)
     if st.session_state.get('original_file_bytes') is None:
          st.session_state['original_file_bytes'] = uploaded_file.getvalue()
 
-    # --- Este try/except envuelve TODA la lógica que depende del archivo ---
+    # Este try/except envuelve TODA la lógica que depende del archivo
     try: 
         wb_check = openpyxl.load_workbook(io.BytesIO(st.session_state['original_file_bytes']), read_only=True)
         sheet_names = wb_check.sheetnames
@@ -411,19 +411,12 @@ else:
     st.session_state['chart_data_extrapolado'] = None
 
 # --- ÁREA PRINCIPAL (GRÁFICOS) ---
-# (Este bloque ahora está fuera del 'else' principal)
 if st.session_state['chart_data_original'] is not None and st.session_state['chart_data_extrapolado'] is not None:
     
-    # Obtener el seed_value usado para la generación (o 1 por defecto si algo falla)
-    # 'locals()' no es seguro en este contexto, así que lo leemos desde el widget
-    # Nota: Esto requiere que el widget 'seed_value' esté definido,
-    # lo cual está garantizado si 'uploaded_file' no es None.
-    # Por seguridad, añadimos un chequeo de 'seed_value'
-    try:
-        # Esto solo funcionará si el bloque 'if uploaded_file' se ejecutó
+    # Definir version_display basado en si el archivo está cargado
+    version_display = "N/A"
+    if 'seed_value' in locals():
         version_display = seed_value
-    except NameError:
-        version_display = "N/A" # Fallback por si acaso
 
     st.header(f"Visualización de Temperatura (Hoja: {st.session_state['sheet_temp']})")
     col1, col2 = st.columns(2)
