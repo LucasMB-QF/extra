@@ -3,3 +3,4 @@ openpyxl
 numpy
 scipy
 pandas
+altair
