@@ -154,6 +154,7 @@ def leer_datos_para_grafico(wb_bytes, hoja_nombre):
 
 
 # --- FUNCIÓN DE MODIFICACIÓN PRINCIPAL (V13 - CON SEMILLA) ---
+#@st.cache_data(show_spinner=False) # No podemos cachear esto, necesita recalcularse
 def modificar_workbook_en_memoria(wb_bytes, config, seed_value):
     """Modifica un objeto workbook de openpyxl en memoria. Devuelve el wb modificado."""
     
@@ -250,8 +251,8 @@ def modificar_workbook_en_memoria(wb_bytes, config, seed_value):
 
 # --- INTERFAZ DE STREAMLIT ---
 
-st.set_page_config(layout="wide", page_title="Extrapolador Maestro V13.2")
-st.title("Extrapolador Maestro V13.2 🚀")
+st.set_page_config(layout="wide", page_title="Extrapolador Maestro V14")
+st.title("Extrapolador Maestro V14 🚀")
 st.info("Esta aplicación utiliza el pipeline V12 con una **semilla aleatoria (Número de Versión)** para controlar la aleatoriedad.")
 
 # --- BARRA LATERAL (CONTROLES) ---
@@ -274,14 +275,20 @@ if 'sheet_hr' not in st.session_state:
     st.session_state['sheet_hr'] = ""
 
 
-# --- INICIO DEL BLOQUE LÓGICO (V13.2 CORREGIDO) ---
+# --- INICIO DEL BLOQUE LÓGICO ---
 if uploaded_file is not None:
     
     # Almacenar bytes originales en session_state (solo una vez)
-    if st.session_state.get('original_file_bytes') is None:
+    # y limpiar si se sube un nuevo archivo
+    if st.session_state.get('original_file_name') != uploaded_file.name:
          st.session_state['original_file_bytes'] = uploaded_file.getvalue()
+         st.session_state['original_file_name'] = uploaded_file.name
+         # Limpiar datos procesados viejos
+         st.session_state['processed_file_bytes'] = None
+         st.session_state['chart_data_original'] = None
+         st.session_state['chart_data_extrapolado'] = None
 
-    # Este try/except envuelve TODA la lógica que depende del archivo
+
     try: 
         wb_check = openpyxl.load_workbook(io.BytesIO(st.session_state['original_file_bytes']), read_only=True)
         sheet_names = wb_check.sheetnames
@@ -304,7 +311,7 @@ if uploaded_file is not None:
         st.sidebar.header("3. Parámetros de Extrapolación")
         
         seed_value = st.sidebar.number_input(
-            "Número de Versión (Semilla)", 
+            "Versión (Semilla Aleatoria)", 
             value=1, 
             min_value=1, 
             step=1,
@@ -318,71 +325,78 @@ if uploaded_file is not None:
         )
         config_base = CONFIGURACION_V12[preset_name]
 
-        st.sidebar.subheader("Anulación Manual de Parámetros")
+        st.sidebar.subheader("Ajustes Manuales (Controles)")
         
         var_min_max = st.sidebar.slider(
-            "Rango de Pico de Extrapolación (%)", 
-            0.0, 0.2, (config_base['variacion_min'], config_base['variacion_max']), 0.01
+            "Extrapolación (Pico %)", 
+            0.0, 0.2, (config_base['variacion_min'], config_base['variacion_max']), 0.01,
+            help="Rango aleatorio para el pico de la extrapolación (ej. 3% a 5%). Esto controla qué tanto 'sube' la curva."
         )
         
         offset_min_max = st.sidebar.slider(
-            "Rango de Offset Base (°C o %HR)", 
-            -2.0, 1.0, (config_base['offset_min'], config_base['offset_max']), 0.1
+            "Nivel Vertical (Offset)", 
+            -2.0, 1.0, (config_base['offset_min'], config_base['offset_max']), 0.1,
+            help="Rango aleatorio para 'bajar' (negativo) o 'subir' (positivo) cada curva DL individualmente."
         )
 
         amplitud = st.sidebar.slider(
-            "Amplitud de Deriva (Unicidad)", 
-            0.0, 1.0, config_base['amplitud'], 0.05
+            "Nivel de 'Unicidad' (Deriva)", 
+            0.0, 1.0, config_base['amplitud'], 0.05,
+            help="Controla la 'personalidad' de cada curva. 0 = curvas idénticas. 0.5 = curvas muy únicas."
         )
         
         sigma = st.sidebar.slider(
-            "Suavidad de Deriva (Ondas)", 
-            3, 25, config_base['sigma'], 1
+            "Suavidad de 'Unicidad' (Ondas)", 
+            3, 25, config_base['sigma'], 1,
+            help="Longitud de las 'ondas' de deriva. 3 = ondas cortas/rápidas. 20 = ondas largas/suaves."
         )
         
         prob_limpieza = st.sidebar.slider(
-            "Probabilidad de Limpieza de Picos", 
-            0.0, 1.0, config_base['prob_limpieza_picos'], 0.1
+            "Limpieza de Picos (Probabilidad)", 
+            0.0, 1.0, config_base['prob_limpieza_picos'], 0.1,
+            help="Probabilidad de que los picos anómalos (como 'caídas' de sensor) sean eliminados. 1.0 = 100% limpios. 0.0 = 100% originales."
         )
 
-        if st.sidebar.button("Generar/Actualizar Gráficos", type="primary"):
-            with st.spinner("Procesando archivo... Esto puede tardar unos segundos..."):
-                try:
-                    # 1. Leer datos originales para los gráficos
-                    st.session_state['chart_data_original'] = {
-                        st.session_state['sheet_temp']: leer_datos_para_grafico(st.session_state['original_file_bytes'], st.session_state['sheet_temp']),
-                        st.session_state['sheet_hr']: leer_datos_para_grafico(st.session_state['original_file_bytes'], st.session_state['sheet_hr'])
-                    }
+        # --- V14: LÓGICA DE PROCESAMIENTO EN TIEMPO REAL ---
+        # No hay botón. Esto se ejecuta cada vez que un widget cambia.
+        with st.spinner("Actualizando extrapolación..."):
+            try:
+                # 1. Leer datos originales para los gráficos
+                st.session_state['chart_data_original'] = {
+                    st.session_state['sheet_temp']: leer_datos_para_grafico(st.session_state['original_file_bytes'], st.session_state['sheet_temp']),
+                    st.session_state['sheet_hr']: leer_datos_para_grafico(st.session_state['original_file_bytes'], st.session_state['sheet_hr'])
+                }
 
-                    # 2. Crear la configuración personalizada
-                    config_personalizada = {
-                        "archivo": config_base["archivo"],
-                        "variacion_min": var_min_max[0],
-                        "variacion_max": var_min_max[1],
-                        "amplitud": amplitud,
-                        "sigma": sigma,
-                        "punto_pico": config_base["punto_pico"],
-                        "offset_min": offset_min_max[0],
-                        "offset_max": offset_min_max[1],
-                        "prob_limpieza_picos": prob_limpieza
-                    }
-                    
-                    # 3. Modificar el workbook EN MEMORIA (pasando la semilla)
-                    processed_bytes = modificar_workbook_en_memoria(st.session_state['original_file_bytes'], config_personalizada, seed_value)
-                    st.session_state['processed_file_bytes'] = processed_bytes
-                    
-                    # 4. Leer datos modificados para los gráficos
-                    st.session_state['chart_data_extrapolado'] = {
-                        st.session_state['sheet_temp']: leer_datos_para_grafico(processed_bytes, st.session_state['sheet_temp']),
-                        st.session_state['sheet_hr']: leer_datos_para_grafico(processed_bytes, st.session_state['sheet_hr'])
-                    }
-                    
-                    st.success(f"¡Extrapolación generada con éxito! (Versión/Semilla: {seed_value})")
+                # 2. Crear la configuración personalizada
+                config_personalizada = {
+                    "archivo": config_base["archivo"],
+                    "variacion_min": var_min_max[0],
+                    "variacion_max": var_min_max[1],
+                    "amplitud": amplitud,
+                    "sigma": sigma,
+                    "punto_pico": config_base["punto_pico"],
+                    "offset_min": offset_min_max[0],
+                    "offset_max": offset_min_max[1],
+                    "prob_limpieza_picos": prob_limpieza
+                }
+                
+                # 3. Modificar el workbook EN MEMORIA (pasando la semilla)
+                processed_bytes = modificar_workbook_en_memoria(st.session_state['original_file_bytes'], config_personalizada, seed_value)
+                st.session_state['processed_file_bytes'] = processed_bytes
+                
+                # 4. Leer datos modificados para los gráficos
+                st.session_state['chart_data_extrapolado'] = {
+                    st.session_state['sheet_temp']: leer_datos_para_grafico(processed_bytes, st.session_state['sheet_temp']),
+                    st.session_state['sheet_hr']: leer_datos_para_grafico(processed_bytes, st.session_state['sheet_hr'])
+                }
+                
+                # No necesitamos el st.success, es molesto en tiempo real
 
-                except Exception as e:
-                    st.error(f"Error durante el procesamiento: {e}")
-                    logger.error(f"Error en Streamlit: {e}", exc_info=True)
+            except Exception as e:
+                st.error(f"Error durante el procesamiento: {e}")
+                logger.error(f"Error en Streamlit: {e}", exc_info=True)
 
+        # Botón de descarga
         if st.session_state['processed_file_bytes']:
             st.sidebar.download_button(
                 label=f"Descargar Excel Modificado (Versión {seed_value})",
@@ -395,16 +409,14 @@ if uploaded_file is not None:
         st.error(f"Error al cargar el archivo: {e}")
         st.warning("El archivo puede estar dañado, protegido con contraseña o no ser un .xlsm válido.")
         logger.error(f"Error en Streamlit al leer el archivo: {e}", exc_info=True)
-        # Limpiar el estado para permitir recargar
         st.session_state['original_file_bytes'] = None
         st.session_state['processed_file_bytes'] = None
         st.session_state['chart_data_original'] = None
         st.session_state['chart_data_extrapolado'] = None
 
 else:
-    # Esto se muestra si no hay ningún archivo cargado
+    # Pantalla inicial
     st.info("Cargue un archivo .xlsm para comenzar.")
-    # Limpiar estado si el archivo se des-selecciona
     st.session_state['processed_file_bytes'] = None
     st.session_state['original_file_bytes'] = None
     st.session_state['chart_data_original'] = None
@@ -413,10 +425,12 @@ else:
 # --- ÁREA PRINCIPAL (GRÁFICOS) ---
 if st.session_state['chart_data_original'] is not None and st.session_state['chart_data_extrapolado'] is not None:
     
-    # Definir version_display basado en si el archivo está cargado
     version_display = "N/A"
-    if 'seed_value' in locals():
+    try:
+        # Esto solo funcionará si el bloque 'if uploaded_file' se ejecutó
         version_display = seed_value
+    except NameError:
+        pass # Mantener "N/A" si la semilla no está definida
 
     st.header(f"Visualización de Temperatura (Hoja: {st.session_state['sheet_temp']})")
     col1, col2 = st.columns(2)
