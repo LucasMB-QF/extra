@@ -85,11 +85,11 @@ CONFIGURACION_BASE = {
 }
 
 # --- FUNCIONES DE GENERACIÓN DE CURVAS (El "Motor") ---
-# (Usamos @st.cache_data para que sean súper rápidas)
 
 @st.cache_data(show_spinner=False)
-def generar_deriva_gaussiana(longitud, amplitud, sigma):
+def generar_deriva_gaussiana(longitud, amplitud, sigma, seed):
     """(PASO 3) Genera una curva de deriva suave (aditiva) única por DL."""
+    np.random.seed(seed) # Usar semilla para reproducibilidad
     try:
         ruido_base = np.random.randn(longitud)
         deriva_suave = gaussian_filter1d(ruido_base, sigma=sigma)
@@ -125,11 +125,16 @@ def generar_curva_multiplicativa(longitud, variacion_percent, punto_pico_frac):
     except Exception: return np.ones(longitud)
 
 @st.cache_data(show_spinner=False)
-def aplicar_pipeline_a_columna(datos_np, config_dl):
+def aplicar_pipeline_a_columna(datos_np, config_dl, seed):
     """Aplica el pipeline de 4 pasos a una sola columna de datos."""
     longitud_actual = len(datos_np)
     if longitud_actual < 20:
         return datos_np
+
+    # Sellar la aleatoriedad para esta columna específica
+    col_seed = seed + hash(config_dl['dl_nombre']) % 1000
+    random.seed(col_seed)
+    np.random.seed(col_seed)
 
     # PASO 1: LIMPIEZA DE PICOS (Probabilística)
     if random.random() < config_dl["prob_limpieza_picos"]:
@@ -142,7 +147,7 @@ def aplicar_pipeline_a_columna(datos_np, config_dl):
     datos_extrapolados = datos_base * curva_multi_dl
     
     # PASO 3: DERIVA DE REALISMO (Única por DL)
-    deriva = generar_deriva_gaussiana(longitud_actual, config_dl["amplitud"], config_dl["sigma"])
+    deriva = generar_deriva_gaussiana(longitud_actual, config_dl["amplitud"], config_dl["sigma"], seed=col_seed + 1)
     datos_con_deriva = datos_extrapolados + deriva
     
     # PASO 4: APLICAR OFFSET BASE (Variable por DL)
@@ -184,7 +189,6 @@ def leer_datos_crudos_excel(wb_bytes):
 
 def generar_configuracion_inicial(datos_crudos, config_base, seed_value):
     """Genera el dict de configuración inicial para CADA DL basado en la semilla."""
-    # Sellar la aleatoriedad para esta generación
     random.seed(seed_value)
     np.random.seed(seed_value)
     
@@ -194,10 +198,10 @@ def generar_configuracion_inicial(datos_crudos, config_base, seed_value):
     hoja_temp_nombre = st.session_state.sheet_temp
     hoja_hr_nombre = st.session_state.sheet_hr
     
-    # Generar config para T°
     if hoja_temp_nombre in datos_crudos:
         for dl_nombre in datos_crudos[hoja_temp_nombre].keys():
             config_t[dl_nombre] = {
+                "dl_nombre": dl_nombre, # Guardar nombre para hash
                 "variacion_percent": random.uniform(config_base["variacion_min"], config_base["variacion_max"]),
                 "amplitud": config_base["amplitud"],
                 "sigma": config_base["sigma"],
@@ -206,10 +210,10 @@ def generar_configuracion_inicial(datos_crudos, config_base, seed_value):
                 "prob_limpieza_picos": config_base["prob_limpieza_picos"]
             }
             
-    # Generar config para %HR
     if hoja_hr_nombre in datos_crudos:
         for dl_nombre in datos_crudos[hoja_hr_nombre].keys():
             config_hr[dl_nombre] = {
+                "dl_nombre": dl_nombre,
                 "variacion_percent": random.uniform(config_base["variacion_min"], config_base["variacion_max"]),
                 "amplitud": config_base["amplitud"],
                 "sigma": config_base["sigma"],
@@ -221,13 +225,13 @@ def generar_configuracion_inicial(datos_crudos, config_base, seed_value):
     return config_t, config_hr
 
 @st.cache_data(show_spinner=False)
-def generar_datos_extrapolados(_datos_crudos_hoja, _config_por_dl):
+def generar_datos_extrapolados(_datos_crudos_hoja, _config_por_dl, seed_value):
     """Genera un DataFrame extrapolado basado en la configuración de cada DL."""
     datos_extrapolados = {}
     for dl_nombre, datos_originales in _datos_crudos_hoja.items():
         if dl_nombre in _config_por_dl:
             config_dl = _config_por_dl[dl_nombre]
-            datos_extrapolados[dl_nombre] = aplicar_pipeline_a_columna(datos_originales, config_dl)
+            datos_extrapolados[dl_nombre] = aplicar_pipeline_a_columna(datos_originales, config_dl, seed_value)
     
     return pd.DataFrame(dict([(k,pd.Series(v)) for k,v in datos_extrapolados.items()]))
 
@@ -264,7 +268,7 @@ def dibujar_grafico_con_limites(df, titulo, limite_max=None, limite_min=None):
     return st.altair_chart(grafico_final, use_container_width=True)
 
 
-def descargar_excel_modificado(wb_bytes, config_t, config_hr, seed_value, file_name):
+def descargar_excel_modificado(wb_bytes, config_t, config_hr, seed_value, file_name, sheet_temp_name, sheet_hr_name, preset_archivo_base):
     """Función final para procesar y descargar el Excel."""
     with st.spinner("Generando archivo Excel completo... Esto puede tardar unos segundos."):
         try:
@@ -273,24 +277,26 @@ def descargar_excel_modificado(wb_bytes, config_t, config_hr, seed_value, file_n
             
             wb = openpyxl.load_workbook(io.BytesIO(wb_bytes), keep_vba=True)
             
-            hoja_temp_nombre = st.session_state.sheet_temp
-            hoja_hr_nombre = st.session_state.sheet_hr
+            aplicar_limite = any(nombre in preset_archivo_base for nombre in ARCHIVOS_CON_LIMITE)
 
             for hoja_nombre in wb.sheetnames:
                 if any(ignorar in hoja_nombre.strip().upper() for ignorar in HOJAS_A_IGNORAR):
                     continue
                 
-                # Decidir qué configuración usar (T° o %HR)
                 config_a_usar = None
-                if hoja_nombre == hoja_temp_nombre:
+                if hoja_nombre == sheet_temp_name:
                     config_a_usar = config_t
-                elif hoja_nombre == hoja_hr_nombre:
+                elif hoja_nombre == sheet_hr_name:
                     config_a_usar = config_hr
-                else: # Si es otra hoja de datos, usar la config de T° por defecto
-                    config_a_usar = config_t 
+                else:
+                    # Intentar adivinar: si no es de HR, usar T° por defecto
+                    if "%HR" not in hoja_nombre.upper() and "HUM" not in hoja_nombre.upper():
+                         config_a_usar = config_t
+                    else:
+                         config_a_usar = config_hr
                 
                 if not config_a_usar:
-                    continue # No hay config para esta hoja
+                    continue 
                     
                 ws = wb[hoja_nombre]
                 for col in ws.iter_cols(min_row=1):
@@ -311,13 +317,11 @@ def descargar_excel_modificado(wb_bytes, config_t, config_hr, seed_value, file_n
                         config_dl = config_a_usar[header_value]
                         
                         # Aplicar pipeline final
-                        datos_finales = aplicar_pipeline_a_columna(datos_np, config_dl)
+                        datos_finales = aplicar_pipeline_a_columna(datos_np, config_dl, seed_value)
                         
-                        # Aplicar Límite (si aplica a esta prueba)
-                        if any(nombre in CONFIGURACION_BASE[st.session_state.preset_name]["archivo"] for nombre in ARCHIVOS_CON_LIMITE):
-                            np.clip(datos_finales, a_min=None, a_max=25.5, out=datos_finales)
+                        if aplicar_limite and (hoja_nombre == sheet_temp_name or "T°" in hoja_nombre):
+                             np.clip(datos_finales, a_min=None, a_max=25.5, out=datos_finales)
 
-                        # Escribir datos de vuelta
                         for i, cell in enumerate(celdas_datos):
                             if i < len(datos_finales):
                                 nuevo_valor = datos_finales[i]
@@ -328,7 +332,6 @@ def descargar_excel_modificado(wb_bytes, config_t, config_hr, seed_value, file_n
                                     except: decimales = 2
                                     cell.value = round(nuevo_valor, decimales)
 
-            # Guardar el workbook modificado en un objeto de bytes
             with io.BytesIO() as f:
                 wb.save(f)
                 return f.getvalue()
@@ -339,8 +342,8 @@ def descargar_excel_modificado(wb_bytes, config_t, config_hr, seed_value, file_n
             return None
 
 # --- INTERFAZ DE STREAMLIT ---
-st.set_page_config(layout="wide", page_title="Extrapolador Maestro V16")
-st.title("Extrapolador Maestro V16 (Editor Híbrido) 🚀")
+st.set_page_config(layout="wide", page_title="Extrapolador Maestro V17")
+st.title("Extrapolador Maestro V17 (Editor Híbrido) 🚀")
 st.info("Genera una extrapolación base y luego ajusta cada curva individualmente en tiempo real.")
 
 # --- BARRA LATERAL (CONTROLES GLOBALES) ---
@@ -349,148 +352,151 @@ uploaded_file = st.sidebar.file_uploader("Cargar archivo .xlsm", type=["xlsm"])
 
 # --- LÓGICA PRINCIPAL ---
 if uploaded_file is not None:
-    # Cargar los datos crudos una sola vez
-    if 'datos_crudos' not in st.session_state or st.session_state.get('file_name') != uploaded_file.name:
+    
+    if st.session_state.get('file_name') != uploaded_file.name:
         st.session_state.datos_crudos = leer_datos_crudos_excel(uploaded_file.getvalue())
         st.session_state.file_name = uploaded_file.name
-        # Limpiar configs viejas
+        st.session_state.original_file_bytes = uploaded_file.getvalue()
         if 'config_t' in st.session_state: del st.session_state.config_t
         if 'config_hr' in st.session_state: del st.session_state.config_hr
 
     if not st.session_state.datos_crudos:
         st.error("No se pudieron leer datos 'DL' válidos de este archivo. Revise el formato.")
     else:
-        # --- SELECCIÓN DE HOJAS ---
-        available_sheets = list(st.session_state.datos_crudos.keys())
-        st.sidebar.header("2. Selección de Hojas")
-        default_temp = next((i for i, s in enumerate(available_sheets) if "T°" in s or "TEMP" in s.upper()), 0)
-        default_hr = next((i for i, s in enumerate(available_sheets) if "%HR" in s or "HR" in s.upper()), 1 if len(available_sheets) > 1 else 0)
-        
-        st.session_state.sheet_temp = st.sidebar.selectbox("Hoja de Temperatura (T°)", available_sheets, index=default_temp)
-        st.session_state.sheet_hr = st.sidebar.selectbox("Hoja de Humedad (%HR)", available_sheets, index=default_hr)
-
-        # --- GENERACIÓN INICIAL ---
-        st.sidebar.header("3. Generación Inicial")
-        seed_value = st.sidebar.number_input("Versión (Semilla Aleatoria)", value=1, min_value=1, step=1)
-        preset_name = st.sidebar.selectbox("Seleccionar Preset de Prueba:", options=list(CONFIGURACION_BASE.keys()), key="preset_name")
-        
-        if st.sidebar.button("Generar Extrapolación Inicial", type="primary"):
-            config_base = CONFIGURACION_BASE[preset_name]
-            st.session_state.config_t, st.session_state.config_hr = generar_configuracion_inicial(st.session_state.datos_crudos, config_base, seed_value)
-            st.success(f"Generada Versión {seed_value} con preset '{preset_name}'")
-
-        # --- EDITOR Y GRÁFICOS (Solo si se ha generado) ---
-        if 'config_t' in st.session_state and 'config_hr' in st.session_state:
+        try:
+            available_sheets = list(st.session_state.datos_crudos.keys())
+            st.sidebar.header("2. Selección de Hojas")
+            default_temp = next((i for i, s in enumerate(available_sheets) if "T°" in s or "TEMP" in s.upper()), 0)
+            default_hr = next((i for i, s in enumerate(available_sheets) if "%HR" in s or "HR" in s.upper()), 1 if len(available_sheets) > 1 else 0)
             
-            # Generar datos para gráficos (se recalcula en tiempo real)
-            with st.spinner("Actualizando gráficos..."):
-                df_orig_temp = pd.DataFrame(st.session_state.datos_crudos[st.session_state.sheet_temp])
-                df_orig_hr = pd.DataFrame(st.session_state.datos_crudos[st.session_state.sheet_hr])
+            st.session_state.sheet_temp = st.sidebar.selectbox("Hoja de Temperatura (T°)", available_sheets, index=default_temp)
+            st.session_state.sheet_hr = st.sidebar.selectbox("Hoja de Humedad (%HR)", available_sheets, index=default_hr)
+
+            st.sidebar.header("3. Generación Inicial")
+            seed_value = st.sidebar.number_input("Versión (Semilla Aleatoria)", value=1, min_value=1, step=1)
+            preset_name = st.sidebar.selectbox("Seleccionar Preset de Prueba:", options=list(CONFIGURACION_BASE.keys()), key="preset_name")
+            
+            if st.sidebar.button("Generar Extrapolación Inicial", type="primary"):
+                config_base = CONFIGURACION_BASE[preset_name]
+                st.session_state.config_t, st.session_state.config_hr = generar_configuracion_inicial(st.session_state.datos_crudos, config_base, seed_value)
+                st.success(f"Generada Versión {seed_value} con preset '{preset_name}'")
+
+            # --- EDITOR Y GRÁFICOS (Solo si se ha generado) ---
+            if 'config_t' in st.session_state and 'config_hr' in st.session_state:
                 
-                df_ext_temp = generar_datos_extrapolados(st.session_state.datos_crudos[st.session_state.sheet_temp], st.session_state.config_t)
-                df_ext_hr = generar_datos_extrapolados(st.session_state.datos_crudos[st.session_state.sheet_hr], st.session_state.config_hr)
+                with st.spinner("Actualizando gráficos en tiempo real..."):
+                    df_orig_temp = pd.DataFrame(st.session_state.datos_crudos[st.session_state.sheet_temp])
+                    df_orig_hr = pd.DataFrame(st.session_state.datos_crudos[st.session_state.sheet_hr])
+                    
+                    df_ext_temp = generar_datos_extrapolados(st.session_state.datos_crudos[st.session_state.sheet_temp], st.session_state.config_t, seed_value)
+                    df_ext_hr = generar_datos_extrapolados(st.session_state.datos_crudos[st.session_state.sheet_hr], st.session_state.config_hr, seed_value)
 
-            # --- Pestañas de Gráficos ---
-            tab_t, tab_hr = st.tabs(["Gráfico de Temperatura", "Gráfico de Humedad"])
+                tab_t, tab_hr = st.tabs(["Gráfico de Temperatura", "Gráfico de Humedad"])
 
-            with tab_t:
-                st.header(f"Visualización de Temperatura (Hoja: {st.session_state.sheet_temp})")
-                col1, col2 = st.columns(2)
-                with col1:
-                    dibujar_grafico_con_limites(df_orig_temp, "Temperatura Original", 25, 15)
-                with col2:
-                    dibujar_grafico_con_limites(df_ext_temp, f"Extrapolado (Versión {seed_value})", 25, 15)
+                with tab_t:
+                    st.header(f"Visualización de Temperatura (Hoja: {st.session_state.sheet_temp})")
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        dibujar_grafico_con_limites(df_orig_temp, "Temperatura Original", 25, 15)
+                    with col2:
+                        dibujar_grafico_con_limites(df_ext_temp, f"Extrapolado (Versión {seed_value})", 25, 15)
 
-            with tab_hr:
-                st.header(f"Visualización de Humedad (Hoja: {st.session_state.sheet_hr})")
-                col3, col4 = st.columns(2)
-                with col3:
-                    dibujar_grafico_con_limites(df_orig_hr, "Humedad Original")
-                with col4:
-                    dibujar_grafico_con_limites(df_ext_hr, f"Extrapolado (Versión {seed_value})")
+                with tab_hr:
+                    st.header(f"Visualización de Humedad (Hoja: {st.session_state.sheet_hr})")
+                    col3, col4 = st.columns(2)
+                    with col3:
+                        dibujar_grafico_con_limites(df_orig_hr, "Humedad Original")
+                    with col4:
+                        dibujar_grafico_con_limites(df_ext_hr, f"Extrapolado (Versión {seed_value})")
 
-            st.divider()
+                st.divider()
 
-            # --- Pestañas del Editor Manual ---
-            st.header("Editor de Curvas Individuales")
-            editor_tab_t, editor_tab_hr = st.tabs(["Editor T°", "Editor %HR"])
+                st.header("Editor de Curvas Individuales (Ajuste Fino)")
+                editor_tab_t, editor_tab_hr = st.tabs([f"Editor T° ({st.session_state.sheet_temp})", f"Editor %HR ({st.session_state.sheet_hr})"])
 
-            with editor_tab_t:
-                st.subheader(f"Ajustes Finos para: {st.session_state.sheet_temp}")
-                for dl_name in st.session_state.config_t.keys():
-                    with st.expander(f"Ajustar: {dl_name}"):
-                        st.session_state.config_t[dl_name]["prob_limpieza_picos"] = st.slider(
-                            "Limpieza de Picos", 0.0, 1.0, st.session_state.config_t[dl_name]["prob_limpieza_picos"], 0.1, 
-                            help="1.0 = 100% limpio. 0.0 = 100% original (con picos).", key=f"t_clean_{dl_name}"
-                        )
-                        st.session_state.config_t[dl_name]["variacion_percent"] = st.slider(
-                            "Extrapolación (Pico %)", 0.0, 0.2, st.session_state.config_t[dl_name]["variacion_percent"], 0.01, 
-                            help="Qué tanto 'sube' la curva en el pico.", key=f"t_var_{dl_name}"
-                        )
-                        st.session_state.config_t[dl_name]["offset_base"] = st.slider(
-                            "Nivel Vertical (Offset)", -2.0, 1.0, st.session_state.config_t[dl_name]["offset_base"], 0.1, 
-                            help="Sube o baja la curva completa.", key=f"t_offset_{dl_name}"
-                        )
-                        st.session_state.config_t[dl_name]["amplitud"] = st.slider(
-                            "Nivel de 'Unicidad' (Deriva)", 0.0, 1.0, st.session_state.config_t[dl_name]["amplitud"], 0.05, 
-                            help="Controla la 'personalidad' de la curva. 0 = plana.", key=f"t_amp_{dl_name}"
-                        )
-                        st.session_state.config_t[dl_name]["sigma"] = st.slider(
-                            "Suavidad de 'Unicidad' (Ondas)", 3, 25, st.session_state.config_t[dl_name]["sigma"], 1, 
-                            help="Longitud de las 'ondas'. 3 = cortas. 20 = largas.", key=f"t_sigma_{dl_name}"
-                        )
+                with editor_tab_t:
+                    st.subheader(f"Ajustes Finos para: {st.session_state.sheet_temp}")
+                    for dl_name in st.session_state.config_t.keys():
+                        with st.expander(f"Ajustar: {dl_name}"):
+                            st.session_state.config_t[dl_name]["prob_limpieza_picos"] = st.slider(
+                                "Limpieza de Picos", 0.0, 1.0, st.session_state.config_t[dl_name]["prob_limpieza_picos"], 0.1, 
+                                help="1.0 = 100% limpio. 0.0 = 100% original (con picos).", key=f"t_clean_{dl_name}"
+                            )
+                            st.session_state.config_t[dl_name]["variacion_percent"] = st.slider(
+                                "Extrapolación (Pico %)", 0.0, 0.2, st.session_state.config_t[dl_name]["variacion_percent"], 0.01, 
+                                help="Qué tanto 'sube' la curva en el pico.", key=f"t_var_{dl_name}"
+                            )
+                            st.session_state.config_t[dl_name]["offset_base"] = st.slider(
+                                "Nivel Vertical (Offset)", -2.0, 1.0, st.session_state.config_t[dl_name]["offset_base"], 0.1, 
+                                help="Sube o baja la curva completa.", key=f"t_offset_{dl_name}"
+                            )
+                            st.session_state.config_t[dl_name]["amplitud"] = st.slider(
+                                "Nivel de 'Unicidad' (Deriva)", 0.0, 1.0, st.session_state.config_t[dl_name]["amplitud"], 0.05, 
+                                help="Controla la 'personalidad' de la curva. 0 = plana.", key=f"t_amp_{dl_name}"
+                            )
+                            st.session_state.config_t[dl_name]["sigma"] = st.slider(
+                                "Suavidad de 'Unicidad' (Ondas)", 3, 25, st.session_state.config_t[dl_name]["sigma"], 1, 
+                                help="Longitud de las 'ondas'. 3 = cortas. 20 = largas.", key=f"t_sigma_{dl_name}"
+                            )
 
-            with editor_tab_hr:
-                st.subheader(f"Ajustes Finos para: {st.session_state.sheet_hr}")
-                for dl_name in st.session_state.config_hr.keys():
-                    with st.expander(f"Ajustar: {dl_name}"):
-                        st.session_state.config_hr[dl_name]["prob_limpieza_picos"] = st.slider(
-                            "Limpieza de Picos", 0.0, 1.0, st.session_state.config_hr[dl_name]["prob_limpieza_picos"], 0.1,
-                            key=f"hr_clean_{dl_name}"
-                        )
-                        st.session_state.config_hr[dl_name]["variacion_percent"] = st.slider(
-                            "Extrapolación (Pico %)", 0.0, 0.2, st.session_state.config_hr[dl_name]["variacion_percent"], 0.01,
-                            key=f"hr_var_{dl_name}"
-                        )
-                        st.session_state.config_hr[dl_name]["offset_base"] = st.slider(
-                            "Nivel Vertical (Offset)", -2.0, 1.0, st.session_state.config_hr[dl_name]["offset_base"], 0.1,
-                            key=f"hr_offset_{dl_name}"
-                        )
-                        st.session_state.config_hr[dl_name]["amplitud"] = st.slider(
-                            "Nivel de 'Unicidad' (Deriva)", 0.0, 1.0, st.session_state.config_hr[dl_name]["amplitud"], 0.05,
-                            key=f"hr_amp_{dl_name}"
-                        )
-                        st.session_state.config_hr[dl_name]["sigma"] = st.slider(
-                            "Suavidad de 'Unicidad' (Ondas)", 3, 25, st.session_state.config_hr[dl_name]["sigma"], 1,
-                            key=f"hr_sigma_{dl_name}"
-                        )
-            
-            # --- Botón de Descarga ---
-            st.sidebar.header("4. Descarga")
-            if st.sidebar.button(f"Generar y Descargar Excel (Versión {seed_value})"):
-                processed_bytes = descargar_excel_modificado(
-                    st.session_state['original_file_bytes'], 
-                    st.session_state.config_t, 
-                    st.session_state.config_hr, 
-                    seed_value,
-                    uploaded_file.name
-                )
-                if processed_bytes:
-                    st.sidebar.download_button(
-                        label="¡Descarga Lista! (Haz clic aquí)",
-                        data=processed_bytes,
-                        file_name=f"extrapolado_v{seed_value}_{uploaded_file.name}",
-                        mime="application/vnd.ms-excel.sheet.macroEnabled.12"
+                with editor_tab_hr:
+                    st.subheader(f"Ajustes Finos para: {st.session_state.sheet_hr}")
+                    for dl_name in st.session_state.config_hr.keys():
+                        with st.expander(f"Ajustar: {dl_name}"):
+                            st.session_state.config_hr[dl_name]["prob_limpieza_picos"] = st.slider(
+                                "Limpieza de Picos", 0.0, 1.0, st.session_state.config_hr[dl_name]["prob_limpieza_picos"], 0.1,
+                                key=f"hr_clean_{dl_name}"
+                            )
+                            st.session_state.config_hr[dl_name]["variacion_percent"] = st.slider(
+                                "Extrapolación (Pico %)", 0.0, 0.2, st.session_state.config_hr[dl_name]["variacion_percent"], 0.01,
+                                key=f"hr_var_{dl_name}"
+                            )
+                            st.session_state.config_hr[dl_name]["offset_base"] = st.slider(
+                                "Nivel Vertical (Offset)", -2.0, 1.0, st.session_state.config_hr[dl_name]["offset_base"], 0.1,
+                                key=f"hr_offset_{dl_name}"
+                            )
+                            st.session_state.config_hr[dl_name]["amplitud"] = st.slider(
+                                "Nivel de 'Unicidad' (Deriva)", 0.0, 1.0, st.session_state.config_hr[dl_name]["amplitud"], 0.05,
+                                key=f"hr_amp_{dl_name}"
+                            )
+                            st.session_state.config_hr[dl_name]["sigma"] = st.slider(
+                                "Suavidad de 'Unicidad' (Ondas)", 3, 25, st.session_state.config_hr[dl_name]["sigma"], 1,
+                                key=f"hr_sigma_{dl_name}"
+                            )
+                
+                # --- Botón de Descarga ---
+                st.sidebar.header("4. Descarga")
+                if st.sidebar.button(f"Generar y Descargar Excel (Versión {seed_value})"):
+                    processed_bytes = descargar_excel_modificado(
+                        st.session_state['original_file_bytes'], 
+                        st.session_state.config_t, 
+                        st.session_state.config_hr, 
+                        seed_value,
+                        uploaded_file.name,
+                        st.session_state.sheet_temp,
+                        st.session_state.sheet_hr,
+                        CONFIGURACION_BASE[preset_name]["archivo"] # Pasar nombre de archivo base para chequeo de límite
                     )
-                    st.sidebar.success("¡Archivo listo para descargar!")
+                    if processed_bytes:
+                        st.sidebar.download_button(
+                            label="¡Descarga Lista! (Haz clic aquí)",
+                            data=processed_bytes,
+                            file_name=f"extrapolado_v{seed_value}_{uploaded_file.name}",
+                            mime="application/vnd.ms-excel.sheet.macroEnabled.12",
+                            key="download_button" # Añadir una clave para que se actualice
+                        )
+                        st.sidebar.success("¡Archivo listo para descargar!")
+                        # Forzar un rerun para que el botón de descarga aparezca
+                        st.experimental_rerun()
 
-    except Exception as e:
-        st.error(f"Error Crítico al cargar el archivo: {e}")
-        st.warning("El archivo puede estar dañado, protegido con contraseña o no ser un .xlsm válido.")
-        logger.error(f"Error en Streamlit al leer el archivo: {e}", exc_info=True)
-        st.session_state.clear() # Resetear todo
+
+        except Exception as e:
+            st.error(f"Error Crítico al cargar el archivo: {e}")
+            st.warning("El archivo puede estar dañado, protegido con contraseña o no ser un .xlsm válido.")
+            logger.error(f"Error en Streamlit al leer el archivo: {e}", exc_info=True)
+            st.session_state.clear() # Resetear todo
 
 else:
     # Pantalla inicial
     st.info("Cargue un archivo .xlsm para comenzar.")
-    st.session_state.clear() # Limpiar todo si no hay archivo
+    st.session_state.clear()
