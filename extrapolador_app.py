@@ -420,7 +420,7 @@ if uploaded_file is not None:
         st.session_state.ediciones_seccion = {}
         st.cache_data.clear()
 
-    if not st.session_state.datos_crudos:
+    if not st.session_state.get("datos_crudos"):
         st.error("No se pudieron leer datos 'DL' válidos de este archivo. Revise el formato.")
     else:
         try:
