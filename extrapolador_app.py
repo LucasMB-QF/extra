@@ -273,15 +273,15 @@ if 'sheet_temp' not in st.session_state:
 if 'sheet_hr' not in st.session_state:
     st.session_state['sheet_hr'] = ""
 
-
+# --- INICIO DEL BLOQUE LÓGICO ---
+# (Este bloque 'if/else' reemplaza la estructura rota de V13.1)
 if uploaded_file is not None:
+    
     # Almacenar bytes originales en session_state
-    if 'original_file_bytes' not in st.session_state or st.session_state.original_file_bytes is None:
+    if st.session_state.get('original_file_bytes') is None:
          st.session_state['original_file_bytes'] = uploaded_file.getvalue()
 
-    # --- ¡¡BLOQUE CORREGIDO!! ---
-    # Este try...except envuelve TODA la lógica de la barra lateral
-    # que depende del archivo cargado.
+    # --- Este try/except envuelve TODA la lógica que depende del archivo ---
     try: 
         wb_check = openpyxl.load_workbook(io.BytesIO(st.session_state['original_file_bytes']), read_only=True)
         sheet_names = wb_check.sheetnames
@@ -391,19 +391,18 @@ if uploaded_file is not None:
                 mime="application/vnd.ms-excel.sheet.macroEnabled.12"
             )
             
-    # --- ¡¡ESTE ES EL BLOQUE QUE AÑADÍ!! ---
     except Exception as e:
         st.error(f"Error al cargar el archivo: {e}")
         st.warning("El archivo puede estar dañado, protegido con contraseña o no ser un .xlsm válido.")
         logger.error(f"Error en Streamlit al leer el archivo: {e}", exc_info=True)
         # Limpiar el estado para permitir recargar
         st.session_state['original_file_bytes'] = None
-    # --- FIN DEL BLOQUE AÑADIDO ---
-
-
-# --- ÁREA PRINCIPAL (GRÁFICOS) ---
+        st.session_state['processed_file_bytes'] = None
+        st.session_state['chart_data_original'] = None
+        st.session_state['chart_data_extrapolado'] = None
 
 else:
+    # Esto se muestra si no hay ningún archivo cargado
     st.info("Cargue un archivo .xlsm para comenzar.")
     # Limpiar estado si el archivo se des-selecciona
     st.session_state['processed_file_bytes'] = None
@@ -411,26 +410,36 @@ else:
     st.session_state['chart_data_original'] = None
     st.session_state['chart_data_extrapolado'] = None
 
-# --- V13.1 CORRECCIÓN: Asegurarse de que seed_value exista antes de mostrar los gráficos ---
-# Si 'seed_value' no está definido (porque no se ha cargado ningún archivo),
-# no intentes mostrar los gráficos.
-if st.session_state['chart_data_original'] is not None and st.session_state['chart_data_extrapolado'] is not None and 'seed_value' in locals():
+# --- ÁREA PRINCIPAL (GRÁFICOS) ---
+# (Este bloque ahora está fuera del 'else' principal)
+if st.session_state['chart_data_original'] is not None and st.session_state['chart_data_extrapolado'] is not None:
     
+    # Obtener el seed_value usado para la generación (o 1 por defecto si algo falla)
+    # 'locals()' no es seguro en este contexto, así que lo leemos desde el widget
+    # Nota: Esto requiere que el widget 'seed_value' esté definido,
+    # lo cual está garantizado si 'uploaded_file' no es None.
+    # Por seguridad, añadimos un chequeo de 'seed_value'
+    try:
+        # Esto solo funcionará si el bloque 'if uploaded_file' se ejecutó
+        version_display = seed_value
+    except NameError:
+        version_display = "N/A" # Fallback por si acaso
+
     st.header(f"Visualización de Temperatura (Hoja: {st.session_state['sheet_temp']})")
     col1, col2 = st.columns(2)
     
     with col1:
         st.subheader("Original")
-        df_orig_temp = st.session_state['chart_data_original'][st.session_state['sheet_temp']]
-        if not df_orig_temp.empty:
+        df_orig_temp = st.session_state['chart_data_original'].get(st.session_state['sheet_temp'])
+        if df_orig_temp is not None and not df_orig_temp.empty:
             st.line_chart(df_orig_temp)
         else:
             st.warning(f"No se encontraron datos 'DL' en la hoja '{st.session_state['sheet_temp']}'.")
 
     with col2:
-        st.subheader(f"Extrapolado (Versión {seed_value})")
-        df_ext_temp = st.session_state['chart_data_extrapolado'][st.session_state['sheet_temp']]
-        if not df_ext_temp.empty:
+        st.subheader(f"Extrapolado (Versión {version_display})")
+        df_ext_temp = st.session_state['chart_data_extrapolado'].get(st.session_state['sheet_temp'])
+        if df_ext_temp is not None and not df_ext_temp.empty:
             st.line_chart(df_ext_temp)
         else:
             st.warning(f"No se pudieron generar datos para '{st.session_state['sheet_temp']}'.")
@@ -442,16 +451,16 @@ if st.session_state['chart_data_original'] is not None and st.session_state['cha
     
     with col3:
         st.subheader("Original")
-        df_orig_hr = st.session_state['chart_data_original'][st.session_state['sheet_hr']]
-        if not df_orig_hr.empty:
+        df_orig_hr = st.session_state['chart_data_original'].get(st.session_state['sheet_hr'])
+        if df_orig_hr is not None and not df_orig_hr.empty:
             st.line_chart(df_orig_hr)
         else:
             st.warning(f"No se encontraron datos 'DL' en la hoja '{st.session_state['sheet_hr']}'.")
 
     with col4:
-        st.subheader(f"Extrapolado (Versión {seed_value})")
-        df_ext_hr = st.session_state['chart_data_extrapolado'][st.session_state['sheet_hr']]
-        if not df_ext_hr.empty:
+        st.subheader(f"Extrapolado (Versión {version_display})")
+        df_ext_hr = st.session_state['chart_data_extrapolado'].get(st.session_state['sheet_hr'])
+        if df_ext_hr is not None and not df_ext_hr.empty:
             st.line_chart(df_ext_hr)
         else:
             st.warning(f"No se pudieron generar datos para '{st.session_state['sheet_hr']}'.")
